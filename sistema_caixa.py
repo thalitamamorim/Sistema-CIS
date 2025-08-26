@@ -4,7 +4,6 @@ from datetime import datetime
 import pandas as pd
 import re
 
-
 # --- Configuração da página ---
 st.set_page_config(
     page_title="Sistema EventoCaixa",
@@ -479,7 +478,7 @@ with abas[1]:
         with col_login2:
             st.info("""
             **Insira suas credenciais administrativas.**
-
+            
             ⚠️ Em caso de esquecimento, contactar o suporte.
             """)
 
@@ -567,7 +566,7 @@ with abas[1]:
                                 devolvido_completo = novo_valor_devolvido >= inv[2]
 
                                 c.execute("""
-                                    UPDATE investidores
+                                    UPDATE investidores 
                                     SET valor_devolvido = ?, devolvido = ?, data_devolucao = ?
                                     WHERE id = ?
                                 """, (novo_valor_devolvido, devolvido_completo, datetime.now().date().isoformat(), inv[0]))
@@ -590,7 +589,7 @@ with abas[1]:
             if st.button("💾 Adicionar Investidor", key="adicionar_investidor"):
                 if nome_investidor and valor_investido > 0:
                     c.execute("INSERT INTO investidores (nome, valor_investido) VALUES (?, ?)",
-                             (nome_investidor, valor_investido))
+                              (nome_investidor, valor_investido))
                     conn.commit()
                     st.success("✅ Investidor adicionado!")
                     st.rerun()
@@ -602,8 +601,8 @@ with abas[1]:
         st.subheader("📋 Contas a Pagar")
 
         c.execute("""
-            SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes
-            FROM fornecedor
+            SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes 
+            FROM fornecedor 
             ORDER BY pago, nome
         """)
         fornecedores = c.fetchall()
@@ -647,7 +646,7 @@ with abas[1]:
                                 pago_completo = novo_valor_pago >= forn[2]
 
                                 c.execute("""
-                                    UPDATE fornecedor
+                                    UPDATE fornecedor 
                                     SET valor_pago = ?, pago = ?, data_pagamento = ?
                                     WHERE id = ?
                                 """, (novo_valor_pago, pago_completo, datetime.now().date().isoformat(), forn[0]))
@@ -691,7 +690,7 @@ with abas[1]:
             if st.button("💾 Salvar Novo Fornecedor", key="salvar_novo_fornecedor"):
                 if nome_novo_fornecedor and valor_novo_fornecedor > 0:
                     c.execute("""
-                        INSERT INTO fornecedor (nome, valor, observacoes)
+                        INSERT INTO fornecedor (nome, valor, observacoes) 
                         VALUES (?, ?, ?)
                     """, (nome_novo_fornecedor, valor_novo_fornecedor, observacoes_novo_fornecedor))
                     conn.commit()
@@ -752,36 +751,37 @@ with abas[1]:
             else:
                 st.info("ℹ️ Nenhum fornecedor cadastrado")
 
-    with tab_investimentos:
-        st.write("### 📊 Relatório de Investimentos")
+        with tab_investimentos:
+            st.write("### 📊 Relatório de Investimentos")
 
-        if investidores:
-            df_investidores = pd.DataFrame(investidores, columns=[
-                "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
+            if investidores:
+                df_investidores = pd.DataFrame(investidores, columns=[
+                    "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
 
-            df_investidores["Restante"] = df_investidores["Valor Investido"] - \
-                df_investidores["Valor Devolvido"]
-            df_investidores["% Devolvido"] = (
-                df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
+                df_investidores["Restante"] = df_investidores["Valor Investido"] - \
+                    df_investidores["Valor Devolvido"]
+                df_investidores["% Devolvido"] = (
+                    df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
 
-            st.dataframe(df_investidores, use_container_width=True)
+                st.dataframe(df_investidores, use_container_width=True)
 
-            # Gráfico de barras para status de devolução (sem matplotlib)
-            status_devolucao = df_investidores["Devolvido"].value_counts()
-            if not status_devolucao.empty:
-                status_devolucao.index = status_devolucao.index.map(
-                    {True: 'Devolvido', False: 'Pendente'})
-                st.bar_chart(status_devolucao)
+                # Gráfico de barras para status de devolução (sem matplotlib)
+                status_devolucao = df_investidores["Devolvido"].value_counts()
+                if not status_devolucao.empty:
+                    status_devolucao.index = status_devolucao.index.map(
+                        {True: 'Devolvido', False: 'Pendente'})
+                    st.bar_chart(status_devolucao)
 
-                # Mostrar estatísticas simples
-                col_stat1, col_stat2 = st.columns(2)
-                with col_stat1:
-                    st.metric("✅ Devolvidos", status_devolucao.get('Devolvido', 0))
-                with col_stat2:
-                    st.metric("⏳ Pendentes", status_devolucao.get('Pendente', 0))
-        else:
-            st.info("ℹ️ Nenhum investidor cadastrado")
-
+                    # Mostrar estatísticas simples
+                    col_stat1, col_stat2 = st.columns(2)
+                    with col_stat1:
+                        st.metric("✅ Devolvidos",
+                                  status_devolucao.get('Devolvido', 0))
+                    with col_stat2:
+                        st.metric("⏳ Pendentes",
+                                  status_devolucao.get('Pendente', 0))
+            else:
+                st.info("ℹ️ Nenhum investidor cadastrado")
 
         with tab_fluxo:
             st.write("### 📈 Fluxo de Caixa")
@@ -925,7 +925,7 @@ with abas[2]:
 
         with st.expander("📋 Caixa - Como funciona"):
             st.write("""
-            1. **Abrir Caixa**: Digite seu nome e clique em 'Abrir Caixa'
+            1. **Abrir Caixa**: Digite seu nome and clique em 'Abrir Caixa'
             2. **Fechar Caixa**: Preencha os valores ao final do dia
             3. **Editar Caixa**: Use o modo 'Editar Caixa Existente' para corrigir erros
             4. **Estoque**: Registre os produtos vendidos/consumidos
@@ -937,7 +937,7 @@ with abas[2]:
             1. Selecione 'Editar Caixa Existente'
             2. Digite seu nome
             3. Selecione o caixa que deseja editar
-            4. Ajuste os valores e clique em 'Salvar Alterações'
+            4. Ajuste os valores and clique em 'Salvar Alterações'
             
             **Para corrigir estoque:**
             1. Digite seu nome no campo 'Editar Estoque'
