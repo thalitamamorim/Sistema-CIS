@@ -536,14 +536,46 @@ with abas[1]:
 
         with col_inv1:
             st.write("### 👥 Investidores")
-            c.execute("SELECT * FROM investidores ORDER BY nome")
+
+            # Buscar totais por investidor
+            c.execute("""
+                SELECT nome, SUM(valor_investido) as total_investido, 
+                       SUM(valor_devolvido) as total_devolvido
+                FROM investidores 
+                GROUP BY nome 
+                ORDER BY nome
+            """)
+            totais_investidores = c.fetchall()
+
+            c.execute("SELECT * FROM investidores ORDER BY nome, id")
             investidores = c.fetchall()
 
             if investidores:
+                # Mostrar totais por investidor
+                st.write("**📊 Totais por Investidor:**")
+                for total in totais_investidores:
+                    nome, total_investido, total_devolvido = total
+                    restante = total_investido - total_devolvido
+
+                    col_total1, col_total2, col_total3 = st.columns(3)
+                    with col_total1:
+                        st.metric(f"💰 {nome}", formatar_moeda(total_investido))
+                    with col_total2:
+                        st.metric("💵 Devolvido",
+                                  formatar_moeda(total_devolvido))
+                    with col_total3:
+                        st.metric("⏳ Restante", formatar_moeda(restante))
+
+                st.divider()
+
+                # Mostrar investimentos individuais
+                st.write("**📋 Investimentos Individuais:**")
                 for inv in investidores:
-                    with st.expander(f"{inv[1]} - {formatar_moeda(inv[2])}"):
+                    with st.expander(f"{inv[1]} - {formatar_moeda(inv[2])} - {formatar_moeda(inv[3])} devolvido"):
                         st.write(f"**Investido:** {formatar_moeda(inv[2])}")
                         st.write(f"**Devolvido:** {formatar_moeda(inv[3])}")
+                        st.write(
+                            f"**Restante:** {formatar_moeda(inv[2] - inv[3])}")
                         st.write(
                             f"**Status:** {'✅ Devolvido' if inv[4] else '⏳ Pendente'}")
 
@@ -599,7 +631,7 @@ with abas[1]:
         st.divider()
 
         st.subheader("📋 Contas a Pagar")
-
+        
         c.execute("""
             SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes 
             FROM fornecedor 
