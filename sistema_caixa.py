@@ -614,24 +614,36 @@ with abas[1]:
             st.write("### ➕ Novo Investidor")
 
             nome_investidor = st.text_input(
-                "Nome do Investidor", key="novo_investidor_nome")
-            valor_investido = st.number_input(
-                "Valor Investido", 0.0, step=0.01, format="%.2f", key="novo_investidor_valor")
+                "Nome do Investidor",
+                key="novo_investidor_nome",
+                placeholder="Ex: João Silva"
+            )
 
-            if st.button("💾 Adicionar Investidor", key="adicionar_investidor"):
-                if nome_investidor and valor_investido > 0:
+            valor_investido = st.number_input(
+                "Valor Investido",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="novo_investidor_valor",
+                value=0.0,
+                placeholder="0,00"
+            )
+
+            if st.button("💾 Adicionar Investidor", type="primary", key="adicionar_investidor"):
+                if nome_investidor.strip() and valor_investido > 0:
                     c.execute("INSERT INTO investidores (nome, valor_investido) VALUES (?, ?)",
-                              (nome_investidor, valor_investido))
+                              (nome_investidor.strip(), valor_investido))
                     conn.commit()
-                    st.success("✅ Investidor adicionado!")
+                    st.success(
+                        f"✅ {nome_investidor} adicionado com investimento de {formatar_moeda(valor_investido)}!")
                     st.rerun()
                 else:
-                    st.error("❌ Preencha todos os campos")
+                    st.error("❌ Preencha todos os campos corretamente")
 
         st.divider()
 
         st.subheader("📋 Contas a Pagar")
-        
+
         c.execute("""
             SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes 
             FROM fornecedor 
@@ -829,7 +841,7 @@ with abas[1]:
 
             with col_res3:
                 st.metric("Obrigações Pendentes",
-                         formatar_moeda(totais['total_a_pagar'] + totais['total_a_devolver']))
+                          formatar_moeda(totais['total_a_pagar'] + totais['total_a_devolver']))
 
             with col_res4:
                 st.metric("Saldo", formatar_moeda(totais['saldo_disponivel']))
