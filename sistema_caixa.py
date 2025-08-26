@@ -752,35 +752,35 @@ with abas[1]:
             else:
                 st.info("ℹ️ Nenhum fornecedor cadastrado")
 
-        with tab_investimentos:
-    st.write("### 📊 Relatório de Investimentos")
+    with tab_investimentos:
+        st.write("### 📊 Relatório de Investimentos")
 
-    if investidores:
-        df_investidores = pd.DataFrame(investidores, columns=[
-            "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
+        if investidores:
+            df_investidores = pd.DataFrame(investidores, columns=[
+                "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
 
-        df_investidores["Restante"] = df_investidores["Valor Investido"] - \
-            df_investidores["Valor Devolvido"]
-        df_investidores["% Devolvido"] = (
-            df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
+            df_investidores["Restante"] = df_investidores["Valor Investido"] - \
+                df_investidores["Valor Devolvido"]
+            df_investidores["% Devolvido"] = (
+                df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
 
-        st.dataframe(df_investidores, use_container_width=True)
+            st.dataframe(df_investidores, use_container_width=True)
 
-        # Gráfico de barras para status de devolução (sem matplotlib)
-        status_devolucao = df_investidores["Devolvido"].value_counts()
-        if not status_devolucao.empty:
-            status_devolucao.index = status_devolucao.index.map(
-                {True: 'Devolvido', False: 'Pendente'})
-            st.bar_chart(status_devolucao)
+            # Gráfico de barras para status de devolução (sem matplotlib)
+            status_devolucao = df_investidores["Devolvido"].value_counts()
+            if not status_devolucao.empty:
+                status_devolucao.index = status_devolucao.index.map(
+                    {True: 'Devolvido', False: 'Pendente'})
+                st.bar_chart(status_devolucao)
 
-            # Mostrar estatísticas simples
-            col_stat1, col_stat2 = st.columns(2)
-            with col_stat1:
-                st.metric("✅ Devolvidos", status_devolucao.get('Devolvido', 0))
-            with col_stat2:
-                st.metric("⏳ Pendentes", status_devolucao.get('Pendente', 0))
-    else:
-        st.info("ℹ️ Nenhum investidor cadastrado")
+                # Mostrar estatísticas simples
+                col_stat1, col_stat2 = st.columns(2)
+                with col_stat1:
+                    st.metric("✅ Devolvidos", status_devolucao.get('Devolvido', 0))
+                with col_stat2:
+                    st.metric("⏳ Pendentes", status_devolucao.get('Pendente', 0))
+        else:
+            st.info("ℹ️ Nenhum investidor cadastrado")
 
 
         with tab_fluxo:
