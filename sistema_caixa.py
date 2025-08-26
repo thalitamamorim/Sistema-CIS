@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime
 import pandas as pd
 import re
+import matplotlib.pyplot as plt
 
 # --- Configuração da página ---
 st.set_page_config(
@@ -54,6 +55,16 @@ c.execute("""CREATE TABLE IF NOT EXISTS investimento (
     valor REAL
 )""")
 
+# Adicione esta criação de tabela após as outras
+c.execute("""CREATE TABLE IF NOT EXISTS investidores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT,
+    valor_investido REAL,
+    valor_devolvido REAL DEFAULT 0,
+    devolvido BOOLEAN DEFAULT FALSE,
+    data_devolucao TEXT
+)""")
+
 # --- Verificar e corrigir estrutura das tabelas ---
 try:
     c.execute("PRAGMA table_info(caixa)")
@@ -82,6 +93,28 @@ def formatar_moeda(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def calcular_totais_investimentos():
+    """Calcula totais relacionados aos investimentos"""
+    # Total investido
+    c.execute("SELECT SUM(valor_investido) FROM investidores")
+    total_investido = c.fetchone()[0] or 0
+
+    # Total já devolvido
+    c.execute("SELECT SUM(valor_devolvido) FROM investidores")
+    total_devolvido = c.fetchone()[0] or 0
+
+    # Total a devolver
+    c.execute(
+        "SELECT SUM(valor_investido - valor_devolvido) FROM investidores WHERE NOT devolvido")
+    total_a_devolver = c.fetchone()[0] or 0
+
+    return {
+        'total_investido': total_investido,
+        'total_devolvido': total_devolvido,
+        'total_a_devolver': total_a_devolver
+    }
+
+
 def calcular_totais():
     """Calcula todos os totais financeiros"""
     # Total de caixa (dinheiro + maquineta - retiradas)
@@ -100,18 +133,23 @@ def calcular_totais():
     # Total a pagar (valor total - valor pago)
     total_a_pagar = total_fornecedores - total_pago
 
-    # Saldo disponível (caixa - total a pagar)
-    saldo_disponivel = total_caixa - total_a_pagar
+    # Calcular totais de investimentos
+    totais_invest = calcular_totais_investimentos()
+
+    # Saldo disponível (caixa - total a pagar - total a devolver)
+    saldo_disponivel = total_caixa - total_a_pagar - \
+        totais_invest['total_a_devolver']
 
     return {
         'total_caixa': total_caixa,
         'total_fornecedores': total_fornecedores,
         'total_pago': total_pago,
         'total_a_pagar': total_a_pagar,
-        'saldo_disponivel': saldo_disponivel
+        'saldo_disponivel': saldo_disponivel,
+        'total_investido': totais_invest['total_investido'],
+        'total_devolvido': totais_invest['total_devolvido'],
+        'total_a_devolver': totais_invest['total_a_devolver']
     }
-
-# --- Componente personalizado para entrada de valores monetários ---
 
 
 def entrada_monetaria(label, key, valor_minimo=0.0):
@@ -168,7 +206,6 @@ abas = st.tabs(["📋 Caixa", "👤 Admin", "🆘 Suporte"])
 with abas[0]:
     st.header("📋 Controle de Caixa")
 
-    # 🔄 NOVO: Seleção de modo (Abrir/Editar)
     modo_caixa = st.radio("Modo de operação:", [
                           "Abrir Novo Caixa", "Editar Caixa Existente"], horizontal=True, key="modo_caixa")
 
@@ -196,10 +233,9 @@ with abas[0]:
                     else:
                         st.error("❌ Digite o nome da funcionária")
             else:
-                st.info("ℹ️ Você já tem um caixa aberto hoje")
+                st.info("ℹ️ Você já tem un caixa aberto hoje")
 
         with col2:
-            # Exibir caixas abertos
             c.execute(
                 "SELECT id, nome_funcionario, data, hora_abertura FROM caixa WHERE hora_fechamento IS NULL")
             caixas_abertos = c.fetchall()
@@ -213,7 +249,6 @@ with abas[0]:
 
         st.divider()
 
-        # Fechamento de caixa
         if caixas_abertos:
             st.subheader("🔒 Fechamento de Caixa")
 
@@ -273,10 +308,9 @@ with abas[0]:
                     st.success(f"✅ Caixa fechado às {hora_fechamento}!")
                     st.rerun()
 
-    else:  # Modo Editar Caixa Existente
+    else:
         st.subheader("✏️ Editar Caixa Existente")
 
-        # Buscar caixas da funcionária
         nome_func_editar = st.text_input(
             "👤 Seu nome para buscar caixas", key="nome_editar")
 
@@ -291,7 +325,6 @@ with abas[0]:
             caixas_funcionaria = c.fetchall()
 
             if caixas_funcionaria:
-                # Listar caixas para edição
                 opcoes_caixas = [
                     f"{c[1]} - {c[2]} - R$ {c[4] + c[5]:.2f} {'(Fechado)' if c[3] else '(Aberto)'}" for c in caixas_funcionaria]
                 caixa_editar = st.selectbox(
@@ -345,7 +378,6 @@ with abas[0]:
 
     st.divider()
 
-    # Controle de estoque com edição
     st.subheader("📦 Controle de Estoque")
 
     col5, col6 = st.columns(2)
@@ -378,7 +410,6 @@ with abas[0]:
         else:
             st.info("ℹ️ Nenhum produto em estoque")
 
-    # 🔄 NOVO: Edição de estoque na aba Caixa
     st.divider()
     st.subheader("✏️ Editar Estoque")
 
@@ -428,7 +459,6 @@ with abas[1]:
     st.header("👤 Área Administrativa")
 
     if not st.session_state.admin_logado:
-        # Login form
         st.subheader("🔐 Login Administrativo")
 
         col_login1, col_login2 = st.columns(2)
@@ -439,7 +469,6 @@ with abas[1]:
                                   key="admin_senha_input")
 
             if st.button("Entrar", key="btn_login"):
-                # Simple authentication (in a real app, use secure authentication)
                 if usuario == "admin" and senha == "evento123":
                     st.session_state.admin_logado = True
                     st.session_state.admin_usuario = usuario
@@ -450,7 +479,7 @@ with abas[1]:
         with col_login2:
             st.info("""
             **Insira suas credenciais administrativas.**
-            
+
             ⚠️ Em caso de esquecimento, contactar o suporte.
             """)
 
@@ -464,14 +493,11 @@ with abas[1]:
 
         st.divider()
 
-        # 🎯 NOVO: DASHBOARD FINANCEIRO
         st.subheader("📊 Dashboard Financeiro")
 
-        # Calcular totais
         totais = calcular_totais()
 
-        # Métricas principais
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         with col1:
             st.metric("💰 Total em Caixa",
@@ -490,30 +516,102 @@ with abas[1]:
                       delta=formatar_moeda(-totais['total_a_pagar']))
 
         with col4:
+            st.metric("🎯 A Devolver",
+                      formatar_moeda(totais['total_a_devolver']),
+                      help="Valor que precisa ser devolvido aos investidores",
+                      delta=formatar_moeda(-totais['total_a_devolver']))
+
+        with col5:
             cor_saldo = "green" if totais['saldo_disponivel'] >= 0 else "red"
             st.metric("💵 Saldo Disponível",
                       formatar_moeda(totais['saldo_disponivel']),
-                      help="Total em caixa menos contas a pagar",
+                      help="Total em caixa menos contas a pagar e investimentos a devolver",
                       delta=formatar_moeda(totais['saldo_disponivel']))
 
         st.divider()
 
-        # 📋 CONTAS A PAGAR COM CHECK
+        # 🎯 CONTROLE DE INVESTIMENTOS
+        st.subheader("🎯 Controle de Investimentos")
+
+        col_inv1, col_inv2 = st.columns(2)
+
+        with col_inv1:
+            st.write("### 👥 Investidores")
+            c.execute("SELECT * FROM investidores ORDER BY nome")
+            investidores = c.fetchall()
+
+            if investidores:
+                for inv in investidores:
+                    with st.expander(f"{inv[1]} - {formatar_moeda(inv[2])}"):
+                        st.write(f"**Investido:** {formatar_moeda(inv[2])}")
+                        st.write(f"**Devolvido:** {formatar_moeda(inv[3])}")
+                        st.write(
+                            f"**Status:** {'✅ Devolvido' if inv[4] else '⏳ Pendente'}")
+
+                        if inv[5]:
+                            st.write(f"**Data de devolução:** {inv[5]}")
+
+                        if not inv[4]:
+                            valor_restante = inv[2] - inv[3]
+                            valor_devolucao = st.number_input(
+                                "Valor a devolver",
+                                min_value=0.0,
+                                max_value=float(valor_restante),
+                                value=float(valor_restante),
+                                format="%.2f",
+                                key=f"devolucao_{inv[0]}"
+                            )
+
+                            if st.button("💵 Registrar Devolução", key=f"devolver_{inv[0]}"):
+                                novo_valor_devolvido = inv[3] + valor_devolucao
+                                devolvido_completo = novo_valor_devolvido >= inv[2]
+
+                                c.execute("""
+                                    UPDATE investidores
+                                    SET valor_devolvido = ?, devolvido = ?, data_devolucao = ?
+                                    WHERE id = ?
+                                """, (novo_valor_devolvido, devolvido_completo, datetime.now().date().isoformat(), inv[0]))
+                                conn.commit()
+
+                                st.success(
+                                    f"✅ Devolução de {formatar_moeda(valor_devolucao)} registrada!")
+                                st.rerun()
+            else:
+                st.info("ℹ️ Nenhum investidor cadastrado")
+
+        with col_inv2:
+            st.write("### ➕ Novo Investidor")
+
+            nome_investidor = st.text_input(
+                "Nome do Investidor", key="novo_investidor_nome")
+            valor_investido = st.number_input(
+                "Valor Investido", 0.0, step=0.01, format="%.2f", key="novo_investidor_valor")
+
+            if st.button("💾 Adicionar Investidor", key="adicionar_investidor"):
+                if nome_investidor and valor_investido > 0:
+                    c.execute("INSERT INTO investidores (nome, valor_investido) VALUES (?, ?)",
+                             (nome_investidor, valor_investido))
+                    conn.commit()
+                    st.success("✅ Investidor adicionado!")
+                    st.rerun()
+                else:
+                    st.error("❌ Preencha todos os campos")
+
+        st.divider()
+
         st.subheader("📋 Contas a Pagar")
 
         c.execute("""
-            SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes 
-            FROM fornecedor 
+            SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes
+            FROM fornecedor
             ORDER BY pago, nome
         """)
         fornecedores = c.fetchall()
 
         if fornecedores:
-            # Separar pagos e pendentes
             fornecedores_pagos = [f for f in fornecedores if f[4]]
             fornecedores_pendentes = [f for f in fornecedores if not f[4]]
 
-            # Contas pendentes
             if fornecedores_pendentes:
                 st.write("### ⏳ Pendentes de Pagamento")
                 for forn in fornecedores_pendentes:
@@ -549,7 +647,7 @@ with abas[1]:
                                 pago_completo = novo_valor_pago >= forn[2]
 
                                 c.execute("""
-                                    UPDATE fornecedor 
+                                    UPDATE fornecedor
                                     SET valor_pago = ?, pago = ?, data_pagamento = ?
                                     WHERE id = ?
                                 """, (novo_valor_pago, pago_completo, datetime.now().date().isoformat(), forn[0]))
@@ -562,7 +660,6 @@ with abas[1]:
                         if forn[6]:
                             st.write(f"*Observações:* {forn[6]}")
 
-            # Contas pagas
             if fornecedores_pagos:
                 st.write("### ✅ Pagas")
                 for forn in fornecedores_pagos:
@@ -577,7 +674,6 @@ with abas[1]:
 
         st.divider()
 
-        # ➕ NOVO FORNECEDOR
         st.subheader("➕ Novo Fornecedor")
 
         col_novo1, col_novo2 = st.columns(2)
@@ -595,7 +691,7 @@ with abas[1]:
             if st.button("💾 Salvar Novo Fornecedor", key="salvar_novo_fornecedor"):
                 if nome_novo_fornecedor and valor_novo_fornecedor > 0:
                     c.execute("""
-                        INSERT INTO fornecedor (nome, valor, observacoes) 
+                        INSERT INTO fornecedor (nome, valor, observacoes)
                         VALUES (?, ?, ?)
                     """, (nome_novo_fornecedor, valor_novo_fornecedor, observacoes_novo_fornecedor))
                     conn.commit()
@@ -606,11 +702,10 @@ with abas[1]:
 
         st.divider()
 
-        # 📊 RELATÓRIOS DETALHADOS
         st.subheader("📊 Relatórios Detalhados")
 
-        tab_caixa, tab_fornecedores, tab_fluxo, tab_estoque = st.tabs(
-            ["Caixa", "Fornecedores", "Fluxo de Caixa", "📦 Estoque"])
+        tab_caixa, tab_fornecedores, tab_investimentos, tab_fluxo, tab_estoque = st.tabs(
+            ["Caixa", "Fornecedores", "Investimentos", "Fluxo de Caixa", "📦 Estoque"])
 
         with tab_caixa:
             c.execute(
@@ -621,7 +716,6 @@ with abas[1]:
                 df_caixa = pd.DataFrame(caixas, columns=[
                                         "ID", "Data", "Abertura", "Fechamento", "Funcionária", "Dinheiro", "Maquineta", "Retiradas", "Observações"])
 
-                # CONVERSÃO PARA VALORES NUMÉRICOS (CORREÇÃO DO ERRO)
                 df_caixa["Dinheiro"] = pd.to_numeric(
                     df_caixa["Dinheiro"], errors='coerce').fillna(0)
                 df_caixa["Maquineta"] = pd.to_numeric(
@@ -634,7 +728,6 @@ with abas[1]:
 
                 st.dataframe(df_caixa, use_container_width=True)
 
-                # Gráfico de evolução do caixa
                 df_caixa["Data"] = pd.to_datetime(df_caixa["Data"])
                 df_diario = df_caixa.groupby(
                     "Data")["Total"].sum().reset_index()
@@ -653,53 +746,76 @@ with abas[1]:
 
                 st.dataframe(df_fornecedores, use_container_width=True)
 
-                # Gráfico de status de pagamento
                 status_count = df_fornecedores["Pago"].value_counts()
                 st.bar_chart(status_count)
 
             else:
                 st.info("ℹ️ Nenhum fornecedor cadastrado")
 
+        with tab_investimentos:
+            st.write("### 📊 Relatório de Investimentos")
+
+            if investidores:
+                df_investidores = pd.DataFrame(investidores, columns=[
+                    "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
+
+                df_investidores["Restante"] = df_investidores["Valor Investido"] - \
+                    df_investidores["Valor Devolvido"]
+                df_investidores["% Devolvido"] = (
+                    df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
+
+                st.dataframe(df_investidores, use_container_width=True)
+
+                # Gráfico de barras para status de devolução
+                status_devolucao = df_investidores["Devolvido"].value_counts()
+                if not status_devolucao.empty:
+                    status_devolucao.index = status_devolucao.index.map(
+                        {True: 'Devolvido', False: 'Pendente'})
+                    st.bar_chart(status_devolucao)
+            else:
+                st.info("ℹ️ Nenhum investidor cadastrado")
+
         with tab_fluxo:
             st.write("### 📈 Fluxo de Caixa")
 
-            # Resumo financeiro
-            col_res1, col_res2, col_res3 = st.columns(3)
+            col_res1, col_res2, col_res3, col_res4 = st.columns(4)
 
             with col_res1:
                 st.metric("Entradas", formatar_moeda(totais['total_caixa']))
 
             with col_res2:
-                st.metric("Saídas", formatar_moeda(totais['total_pago']))
+                st.metric("Saídas", formatar_moeda(
+                    totais['total_pago'] + totais['total_devolvido']))
 
             with col_res3:
+                st.metric("Obrigações Pendentes",
+                         formatar_moeda(totais['total_a_pagar'] + totais['total_a_devolver']))
+
+            with col_res4:
                 st.metric("Saldo", formatar_moeda(totais['saldo_disponivel']))
 
-            # Projeção futura
             st.write("### 🔮 Projeção")
             st.info(f"""
             **Situação atual:**
             - 💰 Disponível: {formatar_moeda(totais['saldo_disponivel'])}
-            - ⏳ A pagar: {formatar_moeda(totais['total_a_pagar'])}
-            - 📊 Saldo final projetado: {formatar_moeda(totais['saldo_disponivel'] - totais['total_a_pagar'])}
+            - ⏳ A pagar (fornecedores): {formatar_moeda(totais['total_a_pagar'])}
+            - 🎯 A devolver (investidores): {formatar_moeda(totais['total_a_devolver'])}
+            - 📊 Saldo final projetado: {formatar_moeda(totais['saldo_disponivel'] - totais['total_a_pagar'] - totais['total_a_devolver'])}
             """)
 
         with tab_estoque:
             st.subheader("📦 Histórico Completo de Estoque")
 
-            # Buscar todas as datas com movimentação de estoque
             c.execute("SELECT DISTINCT data FROM estoque ORDER BY data DESC")
             datas_estoque = [d[0] for d in c.fetchall()]
 
             if datas_estoque:
-                # Selecionar data para visualizar
                 data_selecionada = st.selectbox(
                     "📅 Selecione a data para visualizar o estoque:",
                     datas_estoque,
                     key="select_data_estoque"
                 )
 
-                # Buscar estoque da data selecionada
                 c.execute("""
                     SELECT produto, quantidade, responsavel 
                     FROM estoque 
@@ -712,11 +828,9 @@ with abas[1]:
                 if itens_data:
                     st.write(f"### 📋 Estoque em {data_selecionada}")
 
-                    # Criar DataFrame para exibição
                     df_estoque = pd.DataFrame(
                         itens_data, columns=["Produto", "Quantidade", "Responsável"])
 
-                    # Agrupar por produto para mostrar total do dia
                     df_agrupado = df_estoque.groupby(
                         "Produto")["Quantidade"].sum().reset_index()
                     df_agrupado["Responsável"] = "Vários"
@@ -731,7 +845,6 @@ with abas[1]:
                         st.write("**📝 Detalhes por Responsável:**")
                         st.dataframe(df_estoque, use_container_width=True)
 
-                    # Estatísticas
                     total_itens = df_estoque["Quantidade"].sum()
                     total_produtos = len(df_agrupado)
                     total_responsaveis = df_estoque["Responsável"].nunique()
@@ -748,11 +861,9 @@ with abas[1]:
                     st.info(
                         f"ℹ️ Nenhum item em estoque para a data {data_selecionada}")
 
-                # 📊 Gráfico de evolução do estoque
                 st.divider()
                 st.subheader("📈 Evolução do Estoque")
 
-                # Buscar totais por data
                 c.execute("""
                     SELECT data, produto, SUM(quantidade) as total
                     FROM estoque 
@@ -766,7 +877,6 @@ with abas[1]:
                     df_evolucao = pd.DataFrame(evolucao_estoque, columns=[
                                                "Data", "Produto", "Quantidade"])
 
-                    # Pivot para ter produtos como colunas
                     df_pivot = df_evolucao.pivot_table(
                         index="Data",
                         columns="Produto",
