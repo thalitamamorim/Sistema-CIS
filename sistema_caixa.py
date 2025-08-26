@@ -619,18 +619,15 @@ with abas[1]:
                 placeholder="Ex: João Silva"
             )
 
-            valor_investido = st.number_input(
-                "Valor Investido",
-                min_value=0.0,
-                step=0.01,
-                format="%.2f",
-                key="novo_investidor_valor",
-                value=0.0,
-                placeholder="0,00"
+            # USE A FUNÇÃO entrada_monetaria QUE JÁ FUNCIONA
+            valor_investido = entrada_monetaria(
+                "Valor Investido (R$)",
+                "novo_investidor_valor_input",
+                valor_minimo=0.01
             )
 
             if st.button("💾 Adicionar Investidor", type="primary", key="adicionar_investidor"):
-                if nome_investidor.strip() and valor_investido > 0:
+                if nome_investidor.strip() and valor_investido >= 0.01:
                     c.execute("INSERT INTO investidores (nome, valor_investido) VALUES (?, ?)",
                               (nome_investidor.strip(), valor_investido))
                     conn.commit()
@@ -639,307 +636,311 @@ with abas[1]:
                     st.rerun()
                 else:
                     st.error("❌ Preencha todos os campos corretamente")
+            st.divider()
 
-        st.divider()
+            st.subheader("📋 Contas a Pagar")
 
-        st.subheader("📋 Contas a Pagar")
+            c.execute("""
+                SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes 
+                FROM fornecedor 
+                ORDER BY pago, nome
+            """)
+            fornecedores = c.fetchall()
 
-        c.execute("""
-            SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes 
-            FROM fornecedor 
-            ORDER BY pago, nome
-        """)
-        fornecedores = c.fetchall()
+            if fornecedores:
+                fornecedores_pagos = [f for f in fornecedores if f[4]]
+                fornecedores_pendentes = [f for f in fornecedores if not f[4]]
 
-        if fornecedores:
-            fornecedores_pagos = [f for f in fornecedores if f[4]]
-            fornecedores_pendentes = [f for f in fornecedores if not f[4]]
+                if fornecedores_pendentes:
+                    st.write("### ⏳ Pendentes de Pagamento")
+                    for forn in fornecedores_pendentes:
+                        with st.expander(f"{forn[1]} - {formatar_moeda(forn[2])}", expanded=True):
+                            col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
 
-            if fornecedores_pendentes:
-                st.write("### ⏳ Pendentes de Pagamento")
-                for forn in fornecedores_pendentes:
-                    with st.expander(f"{forn[1]} - {formatar_moeda(forn[2])}", expanded=True):
-                        col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+                            with col_f1:
+                                valor_restante = forn[2] - forn[3]
+                                st.write(
+                                    f"**Valor total:** {formatar_moeda(forn[2])}")
+                                st.write(
+                                    f"**Já pago:** {formatar_moeda(forn[3])}")
+                                st.write(
+                                    f"**Restante:** {formatar_moeda(valor_restante)}")
 
-                        with col_f1:
-                            valor_restante = forn[2] - forn[3]
-                            st.write(
-                                f"**Valor total:** {formatar_moeda(forn[2])}")
-                            st.write(f"**Já pago:** {formatar_moeda(forn[3])}")
-                            st.write(
-                                f"**Restante:** {formatar_moeda(valor_restante)}")
+                            with col_f2:
+                                valor_pagamento = st.number_input(
+                                    "Valor a pagar agora",
+                                    min_value=0.0,
+                                    max_value=float(valor_restante),
+                                    value=float(valor_restante),
+                                    format="%.2f",
+                                    key=f"pagamento_{forn[0]}"
+                                )
 
-                        with col_f2:
-                            valor_pagamento = st.number_input(
-                                "Valor a pagar agora",
-                                min_value=0.0,
-                                max_value=float(valor_restante),
-                                value=float(valor_restante),
-                                format="%.2f",
-                                key=f"pagamento_{forn[0]}"
-                            )
+                                if forn[5]:
+                                    st.write(f"Último pagamento: {forn[5]}")
 
-                            if forn[5]:
-                                st.write(f"Último pagamento: {forn[5]}")
+                            with col_f3:
+                                st.write("")
+                                st.write("")
+                                if st.button("💵 Registrar Pagamento", key=f"pagar_{forn[0]}"):
+                                    novo_valor_pago = forn[3] + valor_pagamento
+                                    pago_completo = novo_valor_pago >= forn[2]
 
-                        with col_f3:
-                            st.write("")
-                            st.write("")
-                            if st.button("💵 Registrar Pagamento", key=f"pagar_{forn[0]}"):
-                                novo_valor_pago = forn[3] + valor_pagamento
-                                pago_completo = novo_valor_pago >= forn[2]
+                                    c.execute("""
+                                        UPDATE fornecedor 
+                                        SET valor_pago = ?, pago = ?, data_pagamento = ?
+                                        WHERE id = ?
+                                    """, (novo_valor_pago, pago_completo, datetime.now().date().isoformat(), forn[0]))
+                                    conn.commit()
 
-                                c.execute("""
-                                    UPDATE fornecedor 
-                                    SET valor_pago = ?, pago = ?, data_pagamento = ?
-                                    WHERE id = ?
-                                """, (novo_valor_pago, pago_completo, datetime.now().date().isoformat(), forn[0]))
-                                conn.commit()
-
-                                st.success(
-                                    f"✅ Pagamento de {formatar_moeda(valor_pagamento)} registrado!")
-                                st.rerun()
+                                    st.success(
+                                        f"✅ Pagamento de {formatar_moeda(valor_pagamento)} registrado!")
+                                    st.rerun()
 
                         if forn[6]:
                             st.write(f"*Observações:* {forn[6]}")
 
-            if fornecedores_pagos:
-                st.write("### ✅ Pagas")
-                for forn in fornecedores_pagos:
-                    st.write(
-                        f"**{forn[1]}** - {formatar_moeda(forn[2])} - 💰 Pago em {forn[5]}")
-                    if forn[3] > forn[2]:
+                if fornecedores_pagos:
+                    st.write("### ✅ Pagas")
+                    for forn in fornecedores_pagos:
                         st.write(
-                            f"*Valor extra pago: {formatar_moeda(forn[3] - forn[2])}*")
-
-        else:
-            st.info("ℹ️ Nenhum fornecedor cadastrado")
-
-        st.divider()
-
-        st.subheader("➕ Novo Fornecedor")
-
-        col_novo1, col_novo2 = st.columns(2)
-
-        with col_novo1:
-            nome_novo_fornecedor = st.text_input(
-                "Nome do Fornecedor", key="novo_fornecedor_nome")
-            valor_novo_fornecedor = st.number_input(
-                "Valor Total", 0.0, step=0.01, format="%.2f", key="novo_fornecedor_valor")
-            observacoes_novo_fornecedor = st.text_area(
-                "Observações", key="novo_fornecedor_obs")
-
-        with col_novo2:
-            st.write("")
-            if st.button("💾 Salvar Novo Fornecedor", key="salvar_novo_fornecedor"):
-                if nome_novo_fornecedor and valor_novo_fornecedor > 0:
-                    c.execute("""
-                        INSERT INTO fornecedor (nome, valor, observacoes) 
-                        VALUES (?, ?, ?)
-                    """, (nome_novo_fornecedor, valor_novo_fornecedor, observacoes_novo_fornecedor))
-                    conn.commit()
-                    st.success("✅ Fornecedor cadastrado!")
-                    st.rerun()
-                else:
-                    st.error("❌ Preencha os campos obrigatórios")
-
-        st.divider()
-
-        st.subheader("📊 Relatórios Detalhados")
-
-        tab_caixa, tab_fornecedores, tab_investimentos, tab_fluxo, tab_estoque = st.tabs(
-            ["Caixa", "Fornecedores", "Investimentos", "Fluxo de Caixa", "📦 Estoque"])
-
-        with tab_caixa:
-            c.execute(
-                "SELECT * FROM caixa WHERE hora_fechamento IS NOT NULL ORDER BY data DESC")
-            caixas = c.fetchall()
-
-            if caixas:
-                df_caixa = pd.DataFrame(caixas, columns=[
-                                        "ID", "Data", "Abertura", "Fechamento", "Funcionária", "Dinheiro", "Maquineta", "Retiradas", "Observações"])
-
-                df_caixa["Dinheiro"] = pd.to_numeric(
-                    df_caixa["Dinheiro"], errors='coerce').fillna(0)
-                df_caixa["Maquineta"] = pd.to_numeric(
-                    df_caixa["Maquineta"], errors='coerce').fillna(0)
-                df_caixa["Retiradas"] = pd.to_numeric(
-                    df_caixa["Retiradas"], errors='coerce').fillna(0)
-
-                df_caixa["Total"] = df_caixa["Dinheiro"] + \
-                    df_caixa["Maquineta"] - df_caixa["Retiradas"]
-
-                st.dataframe(df_caixa, use_container_width=True)
-
-                df_caixa["Data"] = pd.to_datetime(df_caixa["Data"])
-                df_diario = df_caixa.groupby(
-                    "Data")["Total"].sum().reset_index()
-
-                st.line_chart(df_diario, x="Data", y="Total")
-
-            else:
-                st.info("ℹ️ Nenhum caixa fechado encontrado")
-
-        with tab_fornecedores:
-            if fornecedores:
-                df_fornecedores = pd.DataFrame(fornecedores, columns=[
-                                               "ID", "Nome", "Valor", "Valor Pago", "Pago", "Data Pagamento", "Observações"])
-                df_fornecedores["Restante"] = df_fornecedores["Valor"] - \
-                    df_fornecedores["Valor Pago"]
-
-                st.dataframe(df_fornecedores, use_container_width=True)
-
-                status_count = df_fornecedores["Pago"].value_counts()
-                st.bar_chart(status_count)
+                            f"**{forn[1]}** - {formatar_moeda(forn[2])} - 💰 Pago em {forn[5]}")
+                        if forn[3] > forn[2]:
+                            st.write(
+                                f"*Valor extra pago: {formatar_moeda(forn[3] - forn[2])}*")
 
             else:
                 st.info("ℹ️ Nenhum fornecedor cadastrado")
 
-        with tab_investimentos:
-            st.write("### 📊 Relatório de Investimentos")
+            st.divider()
 
-            if investidores:
-                df_investidores = pd.DataFrame(investidores, columns=[
-                    "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
+            st.subheader("➕ Novo Fornecedor")
 
-                df_investidores["Restante"] = df_investidores["Valor Investido"] - \
-                    df_investidores["Valor Devolvido"]
-                df_investidores["% Devolvido"] = (
-                    df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
+            col_novo1, col_novo2 = st.columns(2)
 
-                st.dataframe(df_investidores, use_container_width=True)
+            with col_novo1:
+                nome_novo_fornecedor = st.text_input(
+                    "Nome do Fornecedor", key="novo_fornecedor_nome")
+                valor_novo_fornecedor = st.number_input(
+                    "Valor Total", 0.0, step=0.01, format="%.2f", key="novo_fornecedor_valor")
+                observacoes_novo_fornecedor = st.text_area(
+                    "Observações", key="novo_fornecedor_obs")
 
-                # Gráfico de barras para status de devolução (sem matplotlib)
-                status_devolucao = df_investidores["Devolvido"].value_counts()
-                if not status_devolucao.empty:
-                    status_devolucao.index = status_devolucao.index.map(
-                        {True: 'Devolvido', False: 'Pendente'})
-                    st.bar_chart(status_devolucao)
+            with col_novo2:
+                st.write("")
+                if st.button("💾 Salvar Novo Fornecedor", key="salvar_novo_fornecedor"):
+                    if nome_novo_fornecedor and valor_novo_fornecedor > 0:
+                        c.execute("""
+                            INSERT INTO fornecedor (nome, valor, observacoes) 
+                            VALUES (?, ?, ?)
+                        """, (nome_novo_fornecedor, valor_novo_fornecedor, observacoes_novo_fornecedor))
+                        conn.commit()
+                        st.success("✅ Fornecedor cadastrado!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Preencha os campos obrigatórios")
 
-                    # Mostrar estatísticas simples
-                    col_stat1, col_stat2 = st.columns(2)
-                    with col_stat1:
-                        st.metric("✅ Devolvidos",
-                                  status_devolucao.get('Devolvido', 0))
-                    with col_stat2:
-                        st.metric("⏳ Pendentes",
-                                  status_devolucao.get('Pendente', 0))
-            else:
-                st.info("ℹ️ Nenhum investidor cadastrado")
+            st.divider()
 
-        with tab_fluxo:
-            st.write("### 📈 Fluxo de Caixa")
+            st.subheader("📊 Relatórios Detalhados")
 
-            col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+            tab_caixa, tab_fornecedores, tab_investimentos, tab_fluxo, tab_estoque = st.tabs(
+                ["Caixa", "Fornecedores", "Investimentos", "Fluxo de Caixa", "📦 Estoque"])
 
-            with col_res1:
-                st.metric("Entradas", formatar_moeda(totais['total_caixa']))
+            with tab_caixa:
+                c.execute(
+                    "SELECT * FROM caixa WHERE hora_fechamento IS NOT NULL ORDER BY data DESC")
+                caixas = c.fetchall()
 
-            with col_res2:
-                st.metric("Saídas", formatar_moeda(
-                    totais['total_pago'] + totais['total_devolvido']))
+                if caixas:
+                    df_caixa = pd.DataFrame(caixas, columns=[
+                                            "ID", "Data", "Abertura", "Fechamento", "Funcionária", "Dinheiro", "Maquineta", "Retiradas", "Observações"])
 
-            with col_res3:
-                st.metric("Obrigações Pendentes",
-                          formatar_moeda(totais['total_a_pagar'] + totais['total_a_devolver']))
+                    df_caixa["Dinheiro"] = pd.to_numeric(
+                        df_caixa["Dinheiro"], errors='coerce').fillna(0)
+                    df_caixa["Maquineta"] = pd.to_numeric(
+                        df_caixa["Maquineta"], errors='coerce').fillna(0)
+                    df_caixa["Retiradas"] = pd.to_numeric(
+                        df_caixa["Retiradas"], errors='coerce').fillna(0)
 
-            with col_res4:
-                st.metric("Saldo", formatar_moeda(totais['saldo_disponivel']))
+                    df_caixa["Total"] = df_caixa["Dinheiro"] + \
+                        df_caixa["Maquineta"] - df_caixa["Retiradas"]
 
-            st.write("### 🔮 Projeção")
-            st.info(f"""
-            **Situação atual:**
-            - 💰 Disponível: {formatar_moeda(totais['saldo_disponivel'])}
-            - ⏳ A pagar (fornecedores): {formatar_moeda(totais['total_a_pagar'])}
-            - 🎯 A devolver (investidores): {formatar_moeda(totais['total_a_devolver'])}
-            - 📊 Saldo final projetado: {formatar_moeda(totais['saldo_disponivel'] - totais['total_a_pagar'] - totais['total_a_devolver'])}
-            """)
+                    st.dataframe(df_caixa, use_container_width=True)
 
-        with tab_estoque:
-            st.subheader("📦 Histórico Completo de Estoque")
+                    df_caixa["Data"] = pd.to_datetime(df_caixa["Data"])
+                    df_diario = df_caixa.groupby(
+                        "Data")["Total"].sum().reset_index()
 
-            c.execute("SELECT DISTINCT data FROM estoque ORDER BY data DESC")
-            datas_estoque = [d[0] for d in c.fetchall()]
-
-            if datas_estoque:
-                data_selecionada = st.selectbox(
-                    "📅 Selecione a data para visualizar o estoque:",
-                    datas_estoque,
-                    key="select_data_estoque"
-                )
-
-                c.execute("""
-                    SELECT produto, quantidade, responsavel 
-                    FROM estoque 
-                    WHERE data = ? 
-                    ORDER BY produto
-                """, (data_selecionada,))
-
-                itens_data = c.fetchall()
-
-                if itens_data:
-                    st.write(f"### 📋 Estoque em {data_selecionada}")
-
-                    df_estoque = pd.DataFrame(
-                        itens_data, columns=["Produto", "Quantidade", "Responsável"])
-
-                    df_agrupado = df_estoque.groupby(
-                        "Produto")["Quantidade"].sum().reset_index()
-                    df_agrupado["Responsável"] = "Vários"
-
-                    col_est1, col_est2 = st.columns(2)
-
-                    with col_est1:
-                        st.write("**📊 Resumo por Produto:**")
-                        st.dataframe(df_agrupado, use_container_width=True)
-
-                    with col_est2:
-                        st.write("**📝 Detalhes por Responsável:**")
-                        st.dataframe(df_estoque, use_container_width=True)
-
-                    total_itens = df_estoque["Quantidade"].sum()
-                    total_produtos = len(df_agrupado)
-                    total_responsaveis = df_estoque["Responsável"].nunique()
-
-                    col_stat1, col_stat2, col_stat3 = st.columns(3)
-                    with col_stat1:
-                        st.metric("📦 Total de Itens", total_itens)
-                    with col_stat2:
-                        st.metric("🏷️ Tipos de Produtos", total_produtos)
-                    with col_stat3:
-                        st.metric("👥 Responsáveis", total_responsaveis)
+                    st.line_chart(df_diario, x="Data", y="Total")
 
                 else:
-                    st.info(
-                        f"ℹ️ Nenhum item em estoque para a data {data_selecionada}")
+                    st.info("ℹ️ Nenhum caixa fechado encontrado")
 
-                st.divider()
-                st.subheader("📈 Evolução do Estoque")
+            with tab_fornecedores:
+                if fornecedores:
+                    df_fornecedores = pd.DataFrame(fornecedores, columns=[
+                                                   "ID", "Nome", "Valor", "Valor Pago", "Pago", "Data Pagamento", "Observações"])
+                    df_fornecedores["Restante"] = df_fornecedores["Valor"] - \
+                        df_fornecedores["Valor Pago"]
 
-                c.execute("""
-                    SELECT data, produto, SUM(quantidade) as total
-                    FROM estoque 
-                    GROUP BY data, produto
-                    ORDER BY data
+                    st.dataframe(df_fornecedores, use_container_width=True)
+
+                    status_count = df_fornecedores["Pago"].value_counts()
+                    st.bar_chart(status_count)
+
+                else:
+                    st.info("ℹ️ Nenhum fornecedor cadastrado")
+
+            with tab_investimentos:
+                st.write("### 📊 Relatório de Investimentos")
+
+                if investidores:
+                    df_investidores = pd.DataFrame(investidores, columns=[
+                        "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
+
+                    df_investidores["Restante"] = df_investidores["Valor Investido"] - \
+                        df_investidores["Valor Devolvido"]
+                    df_investidores["% Devolvido"] = (
+                        df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
+
+                    st.dataframe(df_investidores, use_container_width=True)
+
+                    # Gráfico de barras para status de devolução (sem matplotlib)
+                    status_devolucao = df_investidores["Devolvido"].value_counts(
+                    )
+                    if not status_devolucao.empty:
+                        status_devolucao.index = status_devolucao.index.map(
+                            {True: 'Devolvido', False: 'Pendente'})
+                        st.bar_chart(status_devolucao)
+
+                        # Mostrar estatísticas simples
+                        col_stat1, col_stat2 = st.columns(2)
+                        with col_stat1:
+                            st.metric("✅ Devolvidos",
+                                      status_devolucao.get('Devolvido', 0))
+                        with col_stat2:
+                            st.metric("⏳ Pendentes",
+                                      status_devolucao.get('Pendente', 0))
+                else:
+                    st.info("ℹ️ Nenhum investidor cadastrado")
+
+            with tab_fluxo:
+                st.write("### 📈 Fluxo de Caixa")
+
+                col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+
+                with col_res1:
+                    st.metric("Entradas", formatar_moeda(
+                        totais['total_caixa']))
+
+                with col_res2:
+                    st.metric("Saídas", formatar_moeda(
+                        totais['total_pago'] + totais['total_devolvido']))
+
+                with col_res3:
+                    st.metric("Obrigações Pendentes",
+                              formatar_moeda(totais['total_a_pagar'] + totais['total_a_devolver']))
+
+                with col_res4:
+                    st.metric("Saldo", formatar_moeda(
+                        totais['saldo_disponivel']))
+
+                st.write("### 🔮 Projeção")
+                st.info(f"""
+                **Situação atual:**
+                - 💰 Disponível: {formatar_moeda(totais['saldo_disponivel'])}
+                - ⏳ A pagar (fornecedores): {formatar_moeda(totais['total_a_pagar'])}
+                - 🎯 A devolver (investidores): {formatar_moeda(totais['total_a_devolver'])}
+                - 📊 Saldo final projetado: {formatar_moeda(totais['saldo_disponivel'] - totais['total_a_pagar'] - totais['total_a_devolver'])}
                 """)
 
-                evolucao_estoque = c.fetchall()
+            with tab_estoque:
+                st.subheader("📦 Histórico Completo de Estoque")
 
-                if evolucao_estoque:
-                    df_evolucao = pd.DataFrame(evolucao_estoque, columns=[
-                                               "Data", "Produto", "Quantidade"])
+                c.execute("SELECT DISTINCT data FROM estoque ORDER BY data DESC")
+                datas_estoque = [d[0] for d in c.fetchall()]
 
-                    df_pivot = df_evolucao.pivot_table(
-                        index="Data",
-                        columns="Produto",
-                        values="Quantidade",
-                        fill_value=0
-                    ).reset_index()
+                if datas_estoque:
+                    data_selecionada = st.selectbox(
+                        "📅 Selecione a data para visualizar o estoque:",
+                        datas_estoque,
+                        key="select_data_estoque"
+                    )
 
-                    st.line_chart(df_pivot.set_index("Data"))
+                    c.execute("""
+                        SELECT produto, quantidade, responsavel 
+                        FROM estoque 
+                        WHERE data = ? 
+                        ORDER BY produto
+                    """, (data_selecionada,))
 
-            else:
-                st.info("ℹ️ Nenhum registro de estoque encontrado")
+                    itens_data = c.fetchall()
+
+                    if itens_data:
+                        st.write(f"### 📋 Estoque em {data_selecionada}")
+
+                        df_estoque = pd.DataFrame(
+                            itens_data, columns=["Produto", "Quantidade", "Responsável"])
+
+                        df_agrupado = df_estoque.groupby(
+                            "Produto")["Quantidade"].sum().reset_index()
+                        df_agrupado["Responsável"] = "Vários"
+
+                        col_est1, col_est2 = st.columns(2)
+
+                        with col_est1:
+                            st.write("**📊 Resumo por Produto:**")
+                            st.dataframe(df_agrupado, use_container_width=True)
+
+                        with col_est2:
+                            st.write("**📝 Detalhes por Responsável:**")
+                            st.dataframe(df_estoque, use_container_width=True)
+
+                        total_itens = df_estoque["Quantidade"].sum()
+                        total_produtos = len(df_agrupado)
+                        total_responsaveis = df_estoque["Responsável"].nunique(
+                        )
+
+                        col_stat1, col_stat2, col_stat3 = st.columns(3)
+                        with col_stat1:
+                            st.metric("📦 Total de Itens", total_itens)
+                        with col_stat2:
+                            st.metric("🏷️ Tipos de Produtos", total_produtos)
+                        with col_stat3:
+                            st.metric("👥 Responsáveis", total_responsaveis)
+
+                    else:
+                        st.info(
+                            f"ℹ️ Nenhum item em estoque para a data {data_selecionada}")
+
+                    st.divider()
+                    st.subheader("📈 Evolução do Estoque")
+
+                    c.execute("""
+                        SELECT data, produto, SUM(quantidade) as total
+                        FROM estoque 
+                        GROUP BY data, produto
+                        ORDER BY data
+                    """)
+
+                    evolucao_estoque = c.fetchall()
+
+                    if evolucao_estoque:
+                        df_evolucao = pd.DataFrame(evolucao_estoque, columns=[
+                                                   "Data", "Produto", "Quantidade"])
+
+                        df_pivot = df_evolucao.pivot_table(
+                            index="Data",
+                            columns="Produto",
+                            values="Quantidade",
+                            fill_value=0
+                        ).reset_index()
+
+                        st.line_chart(df_pivot.set_index("Data"))
+
+                    else:
+                        st.info("ℹ️ Nenhum registro de estoque encontrado")
 
 # --- ABA SUPORTE ---
 with abas[2]:
