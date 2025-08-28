@@ -1,8 +1,9 @@
 import streamlit as st
-import sqlite3
+from supabase import create_client, Client
 from datetime import datetime
 import pandas as pd
 import re
+import time
 
 # --- Configuração da página ---
 st.set_page_config(
@@ -11,77 +12,19 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Conexão com SQLite ---
-conn = sqlite3.connect("evento.db", check_same_thread=False)
-c = conn.cursor()
+# --- Conexão com Supabase ---
 
-# --- Criar tabelas se não existirem ---
-c.execute("""CREATE TABLE IF NOT EXISTS caixa (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data TEXT,
-    hora_abertura TEXT,
-    hora_fechamento TEXT,
-    nome_funcionario TEXT,
-    dinheiro REAL,
-    maquineta REAL,
-    retiradas REAL DEFAULT 0,
-    observacoes TEXT
-)""")
 
-c.execute("""CREATE TABLE IF NOT EXISTS estoque (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data TEXT,
-    produto TEXT,
-    quantidade INTEGER,
-    responsavel TEXT
-)""")
+@st.cache_resource
+def init_supabase():
+    supabase: Client = create_client(
+        st.secrets["supabase"]["url"],
+        st.secrets["supabase"]["key"]
+    )
+    return supabase
 
-c.execute("""CREATE TABLE IF NOT EXISTS fornecedor (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT,
-    valor REAL,
-    valor_pago REAL DEFAULT 0,
-    pago BOOLEAN DEFAULT FALSE,
-    data_pagamento TEXT,
-    observacoes TEXT
-)""")
 
-c.execute("""CREATE TABLE IF NOT EXISTS investimento (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data TEXT,
-    descricao TEXT,
-    tipo TEXT,
-    valor REAL
-)""")
-
-# Adicione esta criação de tabela após as outras
-c.execute("""CREATE TABLE IF NOT EXISTS investidores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT,
-    valor_investido REAL,
-    valor_devolvido REAL DEFAULT 0,
-    devolvido BOOLEAN DEFAULT FALSE,
-    data_devolucao TEXT
-)""")
-
-# --- Verificar e corrigir estrutura das tabelas ---
-try:
-    c.execute("PRAGMA table_info(caixa)")
-    colunas_caixa = [col[1] for col in c.fetchall()]
-    if 'retiradas' not in colunas_caixa:
-        c.execute("ALTER TABLE caixa ADD COLUMN retiradas REAL DEFAULT 0")
-
-    c.execute("PRAGMA table_info(fornecedor)")
-    colunas_fornecedor = [col[1] for col in c.fetchall()]
-    if 'valor_pago' not in colunas_fornecedor:
-        c.execute("ALTER TABLE fornecedor ADD COLUMN valor_pago REAL DEFAULT 0")
-    if 'data_pagamento' not in colunas_fornecedor:
-        c.execute("ALTER TABLE fornecedor ADD COLUMN data_pagamento TEXT")
-
-except sqlite3.OperationalError:
-    pass
-
-conn.commit()
+supabase = init_supabase()
 
 # --- Funções auxiliares ---
 
@@ -90,65 +33,6 @@ def formatar_moeda(valor):
     if valor == 0:
         return "R$ 0,00"
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-
-def calcular_totais_investimentos():
-    """Calcula totais relacionados aos investimentos"""
-    # Total investido
-    c.execute("SELECT SUM(valor_investido) FROM investidores")
-    total_investido = c.fetchone()[0] or 0
-
-    # Total já devolvido
-    c.execute("SELECT SUM(valor_devolvido) FROM investidores")
-    total_devolvido = c.fetchone()[0] or 0
-
-    # Total a devolver
-    c.execute(
-        "SELECT SUM(valor_investido - valor_devolvido) FROM investidores WHERE NOT devolvido")
-    total_a_devolver = c.fetchone()[0] or 0
-
-    return {
-        'total_investido': total_investido,
-        'total_devolvido': total_devolvido,
-        'total_a_devolver': total_a_devolver
-    }
-
-
-def calcular_totais():
-    """Calcula todos os totais financeiros"""
-    # Total de caixa (dinheiro + maquineta - retiradas)
-    c.execute(
-        "SELECT SUM(dinheiro + maquineta - retiradas) FROM caixa WHERE hora_fechamento IS NOT NULL")
-    total_caixa = c.fetchone()[0] or 0
-
-    # Total de fornecedores (valor total)
-    c.execute("SELECT SUM(valor) FROM fornecedor")
-    total_fornecedores = c.fetchone()[0] or 0
-
-    # Total já pago aos fornecedores
-    c.execute("SELECT SUM(valor_pago) FROM fornecedor")
-    total_pago = c.fetchone()[0] or 0
-
-    # Total a pagar (valor total - valor pago)
-    total_a_pagar = total_fornecedores - total_pago
-
-    # Calcular totais de investimentos
-    totais_invest = calcular_totais_investimentos()
-
-    # Saldo disponível (caixa - total a pagar - total a devolver)
-    saldo_disponivel = total_caixa - total_a_pagar - \
-        totais_invest['total_a_devolver']
-
-    return {
-        'total_caixa': total_caixa,
-        'total_fornecedores': total_fornecedores,
-        'total_pago': total_pago,
-        'total_a_pagar': total_a_pagar,
-        'saldo_disponivel': saldo_disponivel,
-        'total_investido': totais_invest['total_investido'],
-        'total_devolvido': totais_invest['total_devolvido'],
-        'total_a_devolver': totais_invest['total_a_devolver']
-    }
 
 
 def entrada_monetaria(label, key, valor_minimo=0.0):
@@ -187,6 +71,125 @@ def entrada_monetaria(label, key, valor_minimo=0.0):
 
     return valor_processado
 
+# --- Funções de acesso ao Supabase ---
+
+
+def executar_query(tabela, operacao="select", filtros={}, dados=None, id=None):
+    try:
+        if operacao == "select":
+            query = supabase.table(tabela).select("*")
+            for key, value in filtros.items():
+                query = query.eq(key, value)
+            return query.execute()
+
+        elif operacao == "insert":
+            return supabase.table(tabela).insert(dados).execute()
+
+        elif operacao == "update":
+            return supabase.table(tabela).update(dados).eq('id', id).execute()
+
+        elif operacao == "delete":
+            return supabase.table(tabela).delete().eq('id', id).execute()
+
+    except Exception as e:
+        st.error(f"Erro no banco de dados: {e}")
+        return None
+
+
+def buscar_todos(tabela, ordenar_por="id", ascendente=True):
+    try:
+        order = {"column": ordenar_por, "ascending": ascendente}
+        return supabase.table(tabela).select("*").order(ordenar_por, ascending=ascendente).execute()
+    except Exception as e:
+        st.error(f"Erro ao buscar dados: {e}")
+        return None
+
+
+def calcular_totais_investimentos():
+    """Calcula totais relacionados aos investimentos"""
+    try:
+        response = supabase.table('investidores').select(
+            'valor_investido, valor_devolvido, devolvido').execute()
+        total_investido = 0
+        total_devolvido = 0
+        total_a_devolver = 0
+
+        for item in response.data:
+            total_investido += item['valor_investido'] or 0
+            total_devolvido += item['valor_devolvido'] or 0
+            if not item['devolvido']:
+                total_a_devolver += (item['valor_investido']
+                                     or 0) - (item['valor_devolvido'] or 0)
+
+        return {
+            'total_investido': total_investido,
+            'total_devolvido': total_devolvido,
+            'total_a_devolver': total_a_devolver
+        }
+    except Exception as e:
+        st.error(f"Erro ao calcular investimentos: {e}")
+        return {'total_investido': 0, 'total_devolvido': 0, 'total_a_devolver': 0}
+
+
+def calcular_totais():
+    """Calcula todos os totais financeiros"""
+    try:
+        # Total de caixa (dinheiro + maquineta + conta_bancaria - retiradas)
+        response = supabase.table('caixa').select(
+            'dinheiro, maquineta, conta_bancaria, retiradas, hora_fechamento').execute()
+        total_caixa = 0
+        total_conta_bancaria = 0
+
+        for item in response.data:
+            if item['hora_fechamento'] is not None:
+                total_caixa += (item['dinheiro'] or 0) + \
+                    (item['maquineta'] or 0) - (item['retiradas'] or 0)
+                total_conta_bancaria += item['conta_bancaria'] or 0
+
+        # Total de fornecedores
+        response = supabase.table('fornecedor').select(
+            'valor, valor_pago').execute()
+        total_fornecedores = 0
+        total_pago = 0
+        for item in response.data:
+            total_fornecedores += item['valor'] or 0
+            total_pago += item['valor_pago'] or 0
+
+        total_a_pagar = total_fornecedores - total_pago
+
+        # Calcular totais de investimentos
+        totais_invest = calcular_totais_investimentos()
+
+        # Saldo disponível (caixa + conta_bancaria - total a pagar - total a devolver)
+        saldo_disponivel = total_caixa + total_conta_bancaria - \
+            total_a_pagar - totais_invest['total_a_devolver']
+
+        return {
+            'total_caixa': total_caixa,
+            'total_conta_bancaria': total_conta_bancaria,
+            'total_fornecedores': total_fornecedores,
+            'total_pago': total_pago,
+            'total_a_pagar': total_a_pagar,
+            'saldo_disponivel': saldo_disponivel,
+            'total_investido': totais_invest['total_investido'],
+            'total_devolvido': totais_invest['total_devolvido'],
+            'total_a_devolver': totais_invest['total_a_devolver']
+        }
+
+    except Exception as e:
+        st.error(f"Erro ao calcular totais: {e}")
+        return {
+            'total_caixa': 0,
+            'total_conta_bancaria': 0,
+            'total_fornecedores': 0,
+            'total_pago': 0,
+            'total_a_pagar': 0,
+            'saldo_disponivel': 0,
+            'total_investido': 0,
+            'total_devolvido': 0,
+            'total_a_devolver': 0
+        }
+
 
 # --- Interface ---
 st.title("💰 Sistema EventoCaixa")
@@ -216,33 +219,41 @@ with abas[0]:
                 "👤 Nome da Funcionária", key="nome_funcionaria")
 
             data_hoje = datetime.now().date().isoformat()
-            c.execute("SELECT id FROM caixa WHERE data = ? AND nome_funcionario = ? AND hora_fechamento IS NULL",
-                      (data_hoje, nome_func))
-            caixa_aberto = c.fetchone()
+            response = supabase.table('caixa').select('*').eq('data', data_hoje).eq(
+                'nome_funcionario', nome_func).is_('hora_fechamento', None).execute()
+            caixa_aberto = response.data
 
             if not caixa_aberto:
                 if st.button("🟢 Abrir Caixa", type="primary", key="abrir_caixa"):
                     if nome_func:
                         hora_abertura = datetime.now().time().strftime("%H:%M:%S")
-                        c.execute("INSERT INTO caixa (data, hora_abertura, nome_funcionario, dinheiro, maquineta) VALUES (?, ?, ?, ?, ?)",
-                                  (data_hoje, hora_abertura, nome_func, 0.0, 0.0))
-                        conn.commit()
+                        supabase.table('caixa').insert({
+                            'data': data_hoje,
+                            'hora_abertura': hora_abertura,
+                            'nome_funcionario': nome_func,
+                            'dinheiro': 0.0,
+                            'maquineta': 0.0,
+                            'conta_bancaria': 0.0,
+                            'retiradas': 0.0
+                        }).execute()
                         st.success(f"✅ Caixa aberto às {hora_abertura}!")
+                        time.sleep(1)
                         st.rerun()
                     else:
                         st.error("❌ Digite o nome da funcionária")
             else:
-                st.info("ℹ️ Você já tem un caixa aberto hoje")
+                st.info("ℹ️ Você já tem um caixa aberto hoje")
 
         with col2:
-            c.execute(
-                "SELECT id, nome_funcionario, data, hora_abertura FROM caixa WHERE hora_fechamento IS NULL")
-            caixas_abertos = c.fetchall()
+            response = supabase.table('caixa').select(
+                '*').is_('hora_fechamento', None).execute()
+            caixas_abertos = response.data
 
             if caixas_abertos:
                 st.subheader("Caixas Abertos")
                 for caixa in caixas_abertos:
-                    st.write(f"{caixa[1]} - {caixa[2]} ({caixa[3]})")
+                    st.write(
+                        f"{caixa['nome_funcionario']} - {caixa['data']} ({caixa['hora_abertura']})")
             else:
                 st.info("ℹ️ Nenhum caixa aberto no momento")
 
@@ -252,10 +263,10 @@ with abas[0]:
             st.subheader("🔒 Fechamento de Caixa")
 
             caixa_selecionado = st.selectbox("Selecione o caixa para fechar",
-                                             [f"{x[1]} - {x[2]}" for x in caixas_abertos],
+                                             [f"{x['nome_funcionario']} - {x['data']}" for x in caixas_abertos],
                                              key="select_caixa")
             idx = caixas_abertos[[
-                f"{x[1]} - {x[2]}" for x in caixas_abertos].index(caixa_selecionado)][0]
+                f"{x['nome_funcionario']} - {x['data']}" for x in caixas_abertos].index(caixa_selecionado)]['id']
 
             col3, col4 = st.columns(2)
 
@@ -296,40 +307,41 @@ with abas[0]:
                     st.warning("⚠️ Valores zerados. Confirme se está correto.")
                 else:
                     hora_fechamento = datetime.now().time().strftime("%H:%M:%S")
-                    c.execute("UPDATE caixa SET dinheiro=?, maquineta=?, observacoes=?, hora_fechamento=? WHERE id=?",
-                              (dinheiro, maquineta, observacoes, hora_fechamento, idx))
-                    conn.commit()
+                    supabase.table('caixa').update({
+                        'dinheiro': dinheiro,
+                        'maquineta': maquineta,
+                        'retiradas': retiradas,
+                        'observacoes': observacoes,
+                        'hora_fechamento': hora_fechamento
+                    }).eq('id', idx).execute()
 
                     for key in ["dinheiro_input", "maquineta_input", "retiradas_input"]:
                         if key in st.session_state:
                             st.session_state[key] = ""
 
                     st.success(f"✅ Caixa fechado às {hora_fechamento}!")
+                    time.sleep(1)
                     st.rerun()
 
-    else:
+    else:  # Modo Editar Caixa Existente
         st.subheader("✏️ Editar Caixa Existente")
 
         nome_func_editar = st.text_input(
             "👤 Seu nome para buscar caixas", key="nome_editar")
 
         if nome_func_editar:
-            c.execute("""
-                SELECT id, data, hora_abertura, hora_fechamento, dinheiro, maquineta, observacoes 
-                FROM caixa 
-                WHERE nome_funcionario = ? 
-                ORDER BY data DESC, hora_abertura DESC
-            """, (nome_func_editar,))
-
-            caixas_funcionaria = c.fetchall()
+            response = supabase.table('caixa').select('*').eq('nome_funcionario', nome_func_editar).order(
+                'data', desc=True).order('hora_abertura', desc=True).execute()
+            caixas_funcionaria = response.data
 
             if caixas_funcionaria:
                 opcoes_caixas = [
-                    f"{c[1]} - {c[2]} - R$ {c[4] + c[5]:.2f} {'(Fechado)' if c[3] else '(Aberto)'}" for c in caixas_funcionaria]
+                    f"{c['data']} - {c['hora_abertura']} - R$ {c['dinheiro'] + c['maquineta']:.2f} {'(Fechado)' if c['hora_fechamento'] else '(Aberto)'}" for c in caixas_funcionaria]
                 caixa_editar = st.selectbox(
                     "Selecione o caixa para editar", opcoes_caixas, key="select_editar_caixa_user")
 
-                idx = caixas_funcionaria[opcoes_caixas.index(caixa_editar)][0]
+                idx = caixas_funcionaria[opcoes_caixas.index(
+                    caixa_editar)]['id']
                 caixa_dados = caixas_funcionaria[opcoes_caixas.index(
                     caixa_editar)]
 
@@ -340,32 +352,37 @@ with abas[0]:
 
                 with col_edit1:
                     novo_dinheiro = st.number_input("💵 Valor em dinheiro", value=float(
-                        caixa_dados[4]), format="%.2f", key="edit_dinheiro_user")
+                        caixa_dados['dinheiro']), format="%.2f", key="edit_dinheiro_user")
                     novo_maquineta = st.number_input("💳 Valor na maquineta", value=float(
-                        caixa_dados[5]), format="%.2f", key="edit_maquineta_user")
+                        caixa_dados['maquineta']), format="%.2f", key="edit_maquineta_user")
                     novas_retiradas = st.number_input(
-                        "↗️ Retiradas do caixa", value=0.0, format="%.2f", key="edit_retiradas_user")
+                        "↗️ Retiradas do caixa", value=float(caixa_dados['retiradas'] or 0), format="%.2f", key="edit_retiradas_user")
 
                 with col_edit2:
                     st.metric("💰 Total Atual", formatar_moeda(
-                        caixa_dados[4] + caixa_dados[5]))
+                        caixa_dados['dinheiro'] + caixa_dados['maquineta'] - (caixa_dados['retiradas'] or 0)))
                     st.metric("💰 Total Novo", formatar_moeda(
                         novo_dinheiro + novo_maquineta - novas_retiradas))
-                    st.metric("📆 Data", caixa_dados[1])
-                    st.metric("⏰ Hora Abertura", caixa_dados[2])
-                    if caixa_dados[3]:
-                        st.metric("🔒 Hora Fechamento", caixa_dados[3])
+                    st.metric("📆 Data", caixa_dados['data'])
+                    st.metric("⏰ Hora Abertura", caixa_dados['hora_abertura'])
+                    if caixa_dados['hora_fechamento']:
+                        st.metric("🔒 Hora Fechamento",
+                                  caixa_dados['hora_fechamento'])
 
                 nova_observacao = st.text_area(
-                    "📝 Observações", value=caixa_dados[6] or "", key="edit_observacao_user")
+                    "📝 Observações", value=caixa_dados['observacoes'] or "", key="edit_observacao_user")
 
                 col_btn_edit, col_btn_cancel = st.columns(2)
                 with col_btn_edit:
                     if st.button("💾 Salvar Alterações", type="primary", key="save_edit_caixa"):
-                        c.execute("UPDATE caixa SET dinheiro=?, maquineta=?, observacoes=? WHERE id=?",
-                                  (novo_dinheiro, novo_maquineta, nova_observacao, idx))
-                        conn.commit()
+                        supabase.table('caixa').update({
+                            'dinheiro': novo_dinheiro,
+                            'maquineta': novo_maquineta,
+                            'retiradas': novas_retiradas,
+                            'observacoes': nova_observacao
+                        }).eq('id', idx).execute()
                         st.success("✅ Caixa atualizado com sucesso!")
+                        time.sleep(1)
                         st.rerun()
 
                 with col_btn_cancel:
@@ -389,23 +406,34 @@ with abas[0]:
         if st.button("➕ Adicionar ao Estoque", key="add_estoque"):
             if produto and quantidade > 0:
                 data_hoje = datetime.now().date().isoformat()
-                c.execute("INSERT INTO estoque (data, produto, quantidade, responsavel) VALUES (?, ?, ?, ?)",
-                          (data_hoje, produto, quantidade, nome_func if 'nome_func' in locals() else nome_func_editar))
-                conn.commit()
+                responsavel = nome_func if 'nome_func' in locals() else nome_func_editar
+                supabase.table('estoque').insert({
+                    'data': data_hoje,
+                    'produto': produto,
+                    'quantidade': quantidade,
+                    'responsavel': responsavel
+                }).execute()
                 st.success(
                     f"✅ {quantidade} unidades de {produto} adicionadas ao estoque!")
+                time.sleep(1)
                 st.rerun()
             else:
                 st.error("❌ Preencha todos os campos")
 
     with col6:
         st.info("📊 Estoque Atual")
-        c.execute("SELECT produto, SUM(quantidade) FROM estoque GROUP BY produto")
-        estoque_atual = c.fetchall()
+        response = supabase.table('estoque').select(
+            'produto, quantidade').execute()
+        estoque_atual = response.data
 
         if estoque_atual:
-            for produto, qtd in estoque_atual:
-                st.write(f"**{produto}:** {qtd} unidades")
+            # Agrupar por produto
+            df_estoque = pd.DataFrame(estoque_atual)
+            df_agrupado = df_estoque.groupby(
+                'produto')['quantidade'].sum().reset_index()
+
+            for _, row in df_agrupado.iterrows():
+                st.write(f"**{row['produto']}:** {row['quantidade']} unidades")
         else:
             st.info("ℹ️ Nenhum produto em estoque")
 
@@ -416,39 +444,36 @@ with abas[0]:
         "👤 Seu nome para buscar itens do estoque", key="nome_estoque_edit")
 
     if nome_resp_estoque:
-        c.execute("""
-            SELECT id, data, produto, quantidade 
-            FROM estoque 
-            WHERE responsavel = ? 
-            ORDER BY data DESC
-        """, (nome_resp_estoque,))
-
-        itens_estoque = c.fetchall()
+        response = supabase.table('estoque').select(
+            '*').eq('responsavel', nome_resp_estoque).order('data', desc=True).execute()
+        itens_estoque = response.data
 
         if itens_estoque:
             for item in itens_estoque:
-                with st.expander(f"{item[1]} - {item[2]} - {item[3]} unidades"):
+                with st.expander(f"{item['data']} - {item['produto']} - {item['quantidade']} unidades"):
                     col_item1, col_item2 = st.columns([3, 1])
 
                     with col_item1:
                         nova_qtd = st.number_input(
-                            "Nova quantidade", value=item[3], min_value=0, key=f"edit_qtd_{item[0]}")
+                            "Nova quantidade", value=item['quantidade'], min_value=0, key=f"edit_qtd_{item['id']}")
 
                     with col_item2:
                         st.write("")
                         st.write("")
-                        if st.button("💾 Atualizar", key=f"update_estoque_{item[0]}"):
-                            c.execute(
-                                "UPDATE estoque SET quantidade = ? WHERE id = ?", (nova_qtd, item[0]))
-                            conn.commit()
+                        if st.button("💾 Atualizar", key=f"update_estoque_{item['id']}"):
+                            supabase.table('estoque').update({
+                                'quantidade': nova_qtd
+                            }).eq('id', item['id']).execute()
                             st.success("✅ Quantidade atualizada!")
+                            time.sleep(1)
                             st.rerun()
 
             if st.button("🗑️ Limpar Todos os Itens", type="secondary", key="clear_all_estoque"):
-                c.execute("DELETE FROM estoque WHERE responsavel = ?",
-                          (nome_resp_estoque,))
-                conn.commit()
+                for item in itens_estoque:
+                    supabase.table('estoque').delete().eq(
+                        'id', item['id']).execute()
                 st.success("✅ Todos os itens do estoque foram removidos!")
+                time.sleep(1)
                 st.rerun()
         else:
             st.info("ℹ️ Nenhum item encontrado para esta responsável")
@@ -496,7 +521,7 @@ with abas[1]:
 
         totais = calcular_totais()
 
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
 
         with col1:
             st.metric("💰 Total em Caixa",
@@ -504,28 +529,100 @@ with abas[1]:
                       help="Soma de todos os caixas fechados (dinheiro + maquineta - retiradas)")
 
         with col2:
+            st.metric("🏦 Conta Bancária",
+                      formatar_moeda(totais['total_conta_bancaria']),
+                      help="Valores depositados em conta bancária")
+
+        with col3:
             st.metric("📋 Total de Fornecedores",
                       formatar_moeda(totais['total_fornecedores']),
                       help="Valor total de todos os fornecedores cadastrados")
 
-        with col3:
+        with col4:
             st.metric("⏳ A Pagar",
                       formatar_moeda(totais['total_a_pagar']),
                       help="Valor que ainda precisa ser pago aos fornecedores",
                       delta=formatar_moeda(-totais['total_a_pagar']))
 
-        with col4:
+        with col5:
             st.metric("🎯 A Devolver",
                       formatar_moeda(totais['total_a_devolver']),
                       help="Valor que precisa ser devolvido aos investidores",
                       delta=formatar_moeda(-totais['total_a_devolver']))
 
-        with col5:
+        with col6:
             cor_saldo = "green" if totais['saldo_disponivel'] >= 0 else "red"
             st.metric("💵 Saldo Disponível",
                       formatar_moeda(totais['saldo_disponivel']),
                       help="Total em caixa menos contas a pagar e investimentos a devolver",
                       delta=formatar_moeda(totais['saldo_disponivel']))
+
+        st.divider()
+
+        # --- CONTROLE DE CONTA BANCÁRIA ---
+        st.subheader("🏦 Controle de Conta Bancária")
+
+        # Seletor de data para adicionar valor bancário
+        data_selecionada = st.date_input(
+            "Selecione a data:",
+            datetime.now().date(),
+            key="data_conta_bancaria"
+        )
+
+        # Buscar caixas da data selecionada
+        response = supabase.table('caixa').select(
+            '*').eq('data', data_selecionada.isoformat()).execute()
+        caixas_do_dia = response.data
+
+        if caixas_do_dia:
+            st.write(f"**Caixas encontrados para {data_selecionada}:**")
+
+            # Calcular total atual da conta bancária para o dia
+            total_conta_dia = sum(
+                [caixa.get('conta_bancaria', 0) or 0 for caixa in caixas_do_dia])
+
+            col_bank1, col_bank2 = st.columns(2)
+
+            with col_bank1:
+                st.metric("💰 Total em Conta (Dia)",
+                          formatar_moeda(total_conta_dia))
+
+                # Entrada para adicionar valor à conta bancária
+                valor_conta = entrada_monetaria(
+                    "💳 Valor a adicionar à conta bancária",
+                    "valor_conta_bancaria",
+                    valor_minimo=0.0
+                )
+
+                if st.button("💾 Adicionar à Conta Bancária", key="add_conta_bancaria"):
+                    # Distribuir o valor igualmente entre os caixas do dia
+                    valor_por_caixa = valor_conta / \
+                        len(caixas_do_dia) if caixas_do_dia else 0
+
+                    for caixa in caixas_do_dia:
+                        novo_valor = (caixa.get('conta_bancaria', 0)
+                                      or 0) + valor_por_caixa
+                        supabase.table('caixa').update({
+                            'conta_bancaria': novo_valor
+                        }).eq('id', caixa['id']).execute()
+
+                    st.success(
+                        f"✅ Valor de {formatar_moeda(valor_conta)} adicionado à conta bancária!")
+                    time.sleep(1)
+                    st.rerun()
+
+            with col_bank2:
+                # Listar caixas do dia com seus valores bancários
+                st.write("**Valores por caixa:**")
+                for caixa in caixas_do_dia:
+                    st.write(
+                        f"{caixa['nome_funcionario']}: "
+                        f"{formatar_moeda(caixa.get('conta_bancaria', 0) or 0)}"
+                    )
+
+        else:
+            st.warning(f"Nenhum caixa encontrado para {data_selecionada}. "
+                       f"Abra caixas primeiro para adicionar valores bancários.")
 
         st.divider()
 
@@ -538,23 +635,24 @@ with abas[1]:
             st.write("### 👥 Investidores")
 
             # Buscar totais por investidor
-            c.execute("""
-                SELECT nome, SUM(valor_investido) as total_investido, 
-                       SUM(valor_devolvido) as total_devolvido
-                FROM investidores 
-                GROUP BY nome 
-                ORDER BY nome
-            """)
-            totais_investidores = c.fetchall()
+            response = supabase.table('investidores').select(
+                'nome, valor_investido, valor_devolvido').execute()
+            investidores_data = response.data
 
-            c.execute("SELECT * FROM investidores ORDER BY nome, id")
-            investidores = c.fetchall()
+            if investidores_data:
+                # Agrupar por investidor
+                df_investidores = pd.DataFrame(investidores_data)
+                totais_investidores = df_investidores.groupby('nome').agg({
+                    'valor_investido': 'sum',
+                    'valor_devolvido': 'sum'
+                }).reset_index()
 
-            if investidores:
                 # Mostrar totais por investidor
                 st.write("**📊 Totais por Investidor:**")
-                for total in totais_investidores:
-                    nome, total_investido, total_devolvido = total
+                for _, total in totais_investidores.iterrows():
+                    nome = total['nome']
+                    total_investido = total['valor_investido']
+                    total_devolvido = total['valor_devolvido']
                     restante = total_investido - total_devolvido
 
                     col_total1, col_total2, col_total3 = st.columns(3)
@@ -568,44 +666,54 @@ with abas[1]:
 
                 st.divider()
 
+                # Buscar todos os investimentos
+                response = supabase.table('investidores').select(
+                    '*').order('nome').order('id').execute()
+                investidores = response.data
+
                 # Mostrar investimentos individuais
                 st.write("**📋 Investimentos Individuais:**")
                 for inv in investidores:
-                    with st.expander(f"{inv[1]} - {formatar_moeda(inv[2])} - {formatar_moeda(inv[3])} devolvido"):
-                        st.write(f"**Investido:** {formatar_moeda(inv[2])}")
-                        st.write(f"**Devolvido:** {formatar_moeda(inv[3])}")
+                    with st.expander(f"{inv['nome']} - {formatar_moeda(inv['valor_investido'])} - {formatar_moeda(inv['valor_devolvido'])} devolvido"):
                         st.write(
-                            f"**Restante:** {formatar_moeda(inv[2] - inv[3])}")
+                            f"**Investido:** {formatar_moeda(inv['valor_investido'])}")
                         st.write(
-                            f"**Status:** {'✅ Devolvido' if inv[4] else '⏳ Pendente'}")
+                            f"**Devolvido:** {formatar_moeda(inv['valor_devolvido'])}")
+                        st.write(
+                            f"**Restante:** {formatar_moeda(inv['valor_investido'] - inv['valor_devolvido'])}")
+                        st.write(
+                            f"**Status:** {'✅ Devolvido' if inv['devolvido'] else '⏳ Pendente'}")
 
-                        if inv[5]:
-                            st.write(f"**Data de devolução:** {inv[5]}")
+                        if inv['data_devolucao']:
+                            st.write(
+                                f"**Data de devolução:** {inv['data_devolucao']}")
 
-                        if not inv[4]:
-                            valor_restante = inv[2] - inv[3]
+                        if not inv['devolvido']:
+                            valor_restante = inv['valor_investido'] - \
+                                inv['valor_devolvido']
                             valor_devolucao = st.number_input(
                                 "Valor a devolver",
                                 min_value=0.0,
                                 max_value=float(valor_restante),
                                 value=float(valor_restante),
                                 format="%.2f",
-                                key=f"devolucao_{inv[0]}"
+                                key=f"devolucao_{inv['id']}"
                             )
 
-                            if st.button("💵 Registrar Devolução", key=f"devolver_{inv[0]}"):
-                                novo_valor_devolvido = inv[3] + valor_devolucao
-                                devolvido_completo = novo_valor_devolvido >= inv[2]
+                            if st.button("💵 Registrar Devolução", key=f"devolver_{inv['id']}"):
+                                novo_valor_devolvido = inv['valor_devolvido'] + \
+                                    valor_devolucao
+                                devolvido_completo = novo_valor_devolvido >= inv['valor_investido']
 
-                                c.execute("""
-                                    UPDATE investidores 
-                                    SET valor_devolvido = ?, devolvido = ?, data_devolucao = ?
-                                    WHERE id = ?
-                                """, (novo_valor_devolvido, devolvido_completo, datetime.now().date().isoformat(), inv[0]))
-                                conn.commit()
+                                supabase.table('investidores').update({
+                                    'valor_devolvido': novo_valor_devolvido,
+                                    'devolvido': devolvido_completo,
+                                    'data_devolucao': datetime.now().date().isoformat() if devolvido_completo else None
+                                }).eq('id', inv['id']).execute()
 
                                 st.success(
                                     f"✅ Devolução de {formatar_moeda(valor_devolucao)} registrada!")
+                                time.sleep(1)
                                 st.rerun()
             else:
                 st.info("ℹ️ Nenhum investidor cadastrado")
@@ -619,7 +727,6 @@ with abas[1]:
                 placeholder="Ex: João Silva"
             )
 
-            # USE A FUNÇÃO entrada_monetaria QUE JÁ FUNCIONA
             valor_investido = entrada_monetaria(
                 "Valor Investido (R$)",
                 "novo_investidor_valor_input",
@@ -628,41 +735,45 @@ with abas[1]:
 
             if st.button("💾 Adicionar Investidor", type="primary", key="adicionar_investidor"):
                 if nome_investidor.strip() and valor_investido >= 0.01:
-                    c.execute("INSERT INTO investidores (nome, valor_investido) VALUES (?, ?)",
-                              (nome_investidor.strip(), valor_investido))
-                    conn.commit()
+                    supabase.table('investidores').insert({
+                        'nome': nome_investidor.strip(),
+                        'valor_investido': valor_investido,
+                        'valor_devolvido': 0,
+                        'devolvido': False
+                    }).execute()
                     st.success(
                         f"✅ {nome_investidor} adicionado com investimento de {formatar_moeda(valor_investido)}!")
+                    time.sleep(1)
                     st.rerun()
                 else:
                     st.error("❌ Preencha todos os campos corretamente")
+
             st.divider()
 
             st.subheader("📋 Contas a Pagar")
 
-            c.execute("""
-                SELECT id, nome, valor, valor_pago, pago, data_pagamento, observacoes 
-                FROM fornecedor 
-                ORDER BY pago, nome
-            """)
-            fornecedores = c.fetchall()
+            response = supabase.table('fornecedor').select(
+                '*').order('pago').order('nome').execute()
+            fornecedores = response.data
 
             if fornecedores:
-                fornecedores_pagos = [f for f in fornecedores if f[4]]
-                fornecedores_pendentes = [f for f in fornecedores if not f[4]]
+                fornecedores_pagos = [f for f in fornecedores if f['pago']]
+                fornecedores_pendentes = [
+                    f for f in fornecedores if not f['pago']]
 
                 if fornecedores_pendentes:
                     st.write("### ⏳ Pendentes de Pagamento")
                     for forn in fornecedores_pendentes:
-                        with st.expander(f"{forn[1]} - {formatar_moeda(forn[2])}", expanded=True):
+                        with st.expander(f"{forn['nome']} - {formatar_moeda(forn['valor'])}", expanded=True):
                             col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
 
                             with col_f1:
-                                valor_restante = forn[2] - forn[3]
+                                valor_restante = forn['valor'] - \
+                                    forn['valor_pago']
                                 st.write(
-                                    f"**Valor total:** {formatar_moeda(forn[2])}")
+                                    f"**Valor total:** {formatar_moeda(forn['valor'])}")
                                 st.write(
-                                    f"**Já pago:** {formatar_moeda(forn[3])}")
+                                    f"**Já pago:** {formatar_moeda(forn['valor_pago'])}")
                                 st.write(
                                     f"**Restante:** {formatar_moeda(valor_restante)}")
 
@@ -673,41 +784,43 @@ with abas[1]:
                                     max_value=float(valor_restante),
                                     value=float(valor_restante),
                                     format="%.2f",
-                                    key=f"pagamento_{forn[0]}"
+                                    key=f"pagamento_{forn['id']}"
                                 )
 
-                                if forn[5]:
-                                    st.write(f"Último pagamento: {forn[5]}")
+                                if forn['data_pagamento']:
+                                    st.write(
+                                        f"Último pagamento: {forn['data_pagamento']}")
 
                             with col_f3:
                                 st.write("")
                                 st.write("")
-                                if st.button("💵 Registrar Pagamento", key=f"pagar_{forn[0]}"):
-                                    novo_valor_pago = forn[3] + valor_pagamento
-                                    pago_completo = novo_valor_pago >= forn[2]
+                                if st.button("💵 Registrar Pagamento", key=f"pagar_{forn['id']}"):
+                                    novo_valor_pago = forn['valor_pago'] + \
+                                        valor_pagamento
+                                    pago_completo = novo_valor_pago >= forn['valor']
 
-                                    c.execute("""
-                                        UPDATE fornecedor 
-                                        SET valor_pago = ?, pago = ?, data_pagamento = ?
-                                        WHERE id = ?
-                                    """, (novo_valor_pago, pago_completo, datetime.now().date().isoformat(), forn[0]))
-                                    conn.commit()
+                                    supabase.table('fornecedor').update({
+                                        'valor_pago': novo_valor_pago,
+                                        'pago': pago_completo,
+                                        'data_pagamento': datetime.now().date().isoformat()
+                                    }).eq('id', forn['id']).execute()
 
                                     st.success(
                                         f"✅ Pagamento de {formatar_moeda(valor_pagamento)} registrado!")
+                                    time.sleep(1)
                                     st.rerun()
 
-                        if forn[6]:
-                            st.write(f"*Observações:* {forn[6]}")
+                        if forn['observacoes']:
+                            st.write(f"*Observações:* {forn['observacoes']}")
 
                 if fornecedores_pagos:
                     st.write("### ✅ Pagas")
                     for forn in fornecedores_pagos:
                         st.write(
-                            f"**{forn[1]}** - {formatar_moeda(forn[2])} - 💰 Pago em {forn[5]}")
-                        if forn[3] > forn[2]:
+                            f"**{forn['nome']}** - {formatar_moeda(forn['valor'])} - 💰 Pago em {forn['data_pagamento']}")
+                        if forn['valor_pago'] > forn['valor']:
                             st.write(
-                                f"*Valor extra pago: {formatar_moeda(forn[3] - forn[2])}*")
+                                f"*Valor extra pago: {formatar_moeda(forn['valor_pago'] - forn['valor'])}*")
 
             else:
                 st.info("ℹ️ Nenhum fornecedor cadastrado")
@@ -730,12 +843,15 @@ with abas[1]:
                 st.write("")
                 if st.button("💾 Salvar Novo Fornecedor", key="salvar_novo_fornecedor"):
                     if nome_novo_fornecedor and valor_novo_fornecedor > 0:
-                        c.execute("""
-                            INSERT INTO fornecedor (nome, valor, observacoes) 
-                            VALUES (?, ?, ?)
-                        """, (nome_novo_fornecedor, valor_novo_fornecedor, observacoes_novo_fornecedor))
-                        conn.commit()
+                        supabase.table('fornecedor').insert({
+                            'nome': nome_novo_fornecedor,
+                            'valor': valor_novo_fornecedor,
+                            'observacoes': observacoes_novo_fornecedor,
+                            'valor_pago': 0,
+                            'pago': False
+                        }).execute()
                         st.success("✅ Fornecedor cadastrado!")
+                        time.sleep(1)
                         st.rerun()
                     else:
                         st.error("❌ Preencha os campos obrigatórios")
@@ -744,31 +860,22 @@ with abas[1]:
 
             st.subheader("📊 Relatórios Detalhados")
 
-            tab_caixa, tab_fornecedores, tab_investimentos, tab_fluxo, tab_estoque = st.tabs(
-                ["Caixa", "Fornecedores", "Investimentos", "Fluxo de Caixa", "📦 Estoque"])
+            tab_caixa, tab_fornecedores, tab_investimentos, tab_fluxo, tab_estoque, tab_bancario = st.tabs(
+                ["Caixa", "Fornecedores", "Investimentos", "Fluxo de Caixa", "📦 Estoque", "🏦 Bancário"])
 
             with tab_caixa:
-                c.execute(
-                    "SELECT * FROM caixa WHERE hora_fechamento IS NOT NULL ORDER BY data DESC")
-                caixas = c.fetchall()
+                response = supabase.table('caixa').select(
+                    '*').not_.is_('hora_fechamento', None).order('data', desc=True).execute()
+                caixas = response.data
 
                 if caixas:
-                    df_caixa = pd.DataFrame(caixas, columns=[
-                                            "ID", "Data", "Abertura", "Fechamento", "Funcionária", "Dinheiro", "Maquineta", "Retiradas", "Observações"])
-
-                    df_caixa["Dinheiro"] = pd.to_numeric(
-                        df_caixa["Dinheiro"], errors='coerce').fillna(0)
-                    df_caixa["Maquineta"] = pd.to_numeric(
-                        df_caixa["Maquineta"], errors='coerce').fillna(0)
-                    df_caixa["Retiradas"] = pd.to_numeric(
-                        df_caixa["Retiradas"], errors='coerce').fillna(0)
-
-                    df_caixa["Total"] = df_caixa["Dinheiro"] + \
-                        df_caixa["Maquineta"] - df_caixa["Retiradas"]
+                    df_caixa = pd.DataFrame(caixas)
+                    df_caixa["Total"] = df_caixa["dinheiro"] + df_caixa["maquineta"] + \
+                        df_caixa["conta_bancaria"] - df_caixa["retiradas"]
 
                     st.dataframe(df_caixa, use_container_width=True)
 
-                    df_caixa["Data"] = pd.to_datetime(df_caixa["Data"])
+                    df_caixa["Data"] = pd.to_datetime(df_caixa["data"])
                     df_diario = df_caixa.groupby(
                         "Data")["Total"].sum().reset_index()
 
@@ -779,14 +886,13 @@ with abas[1]:
 
             with tab_fornecedores:
                 if fornecedores:
-                    df_fornecedores = pd.DataFrame(fornecedores, columns=[
-                                                   "ID", "Nome", "Valor", "Valor Pago", "Pago", "Data Pagamento", "Observações"])
-                    df_fornecedores["Restante"] = df_fornecedores["Valor"] - \
-                        df_fornecedores["Valor Pago"]
+                    df_fornecedores = pd.DataFrame(fornecedores)
+                    df_fornecedores["Restante"] = df_fornecedores["valor"] - \
+                        df_fornecedores["valor_pago"]
 
                     st.dataframe(df_fornecedores, use_container_width=True)
 
-                    status_count = df_fornecedores["Pago"].value_counts()
+                    status_count = df_fornecedores["pago"].value_counts()
                     st.bar_chart(status_count)
 
                 else:
@@ -795,19 +901,17 @@ with abas[1]:
             with tab_investimentos:
                 st.write("### 📊 Relatório de Investimentos")
 
-                if investidores:
-                    df_investidores = pd.DataFrame(investidores, columns=[
-                        "ID", "Nome", "Valor Investido", "Valor Devolvido", "Devolvido", "Data Devolução"])
-
-                    df_investidores["Restante"] = df_investidores["Valor Investido"] - \
-                        df_investidores["Valor Devolvido"]
+                if investidores_data:
+                    df_investidores = pd.DataFrame(investidores_data)
+                    df_investidores["Restante"] = df_investidores["valor_investido"] - \
+                        df_investidores["valor_devolvido"]
                     df_investidores["% Devolvido"] = (
-                        df_investidores["Valor Devolvido"] / df_investidores["Valor Investido"]) * 100
+                        df_investidores["valor_devolvido"] / df_investidores["valor_investido"]) * 100
 
                     st.dataframe(df_investidores, use_container_width=True)
 
-                    # Gráfico de barras para status de devolução (sem matplotlib)
-                    status_devolucao = df_investidores["Devolvido"].value_counts(
+                    # Gráfico de barras para status de devolução
+                    status_devolucao = df_investidores["devolvido"].value_counts(
                     )
                     if not status_devolucao.empty:
                         status_devolucao.index = status_devolucao.index.map(
@@ -828,22 +932,27 @@ with abas[1]:
             with tab_fluxo:
                 st.write("### 📈 Fluxo de Caixa")
 
-                col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+                col_res1, col_res2, col_res3, col_res4, col_res5 = st.columns(
+                    5)
 
                 with col_res1:
-                    st.metric("Entradas", formatar_moeda(
+                    st.metric("Entradas Caixa", formatar_moeda(
                         totais['total_caixa']))
 
                 with col_res2:
+                    st.metric("🏦 Conta Bancária", formatar_moeda(
+                        totais['total_conta_bancaria']))
+
+                with col_res3:
                     st.metric("Saídas", formatar_moeda(
                         totais['total_pago'] + totais['total_devolvido']))
 
-                with col_res3:
+                with col_res4:
                     st.metric("Obrigações Pendentes",
                               formatar_moeda(totais['total_a_pagar'] + totais['total_a_devolver']))
 
-                with col_res4:
-                    st.metric("Saldo", formatar_moeda(
+                with col_res5:
+                    st.metric("Saldo Total", formatar_moeda(
                         totais['saldo_disponivel']))
 
                 st.write("### 🔮 Projeção")
@@ -858,8 +967,9 @@ with abas[1]:
             with tab_estoque:
                 st.subheader("📦 Histórico Completo de Estoque")
 
-                c.execute("SELECT DISTINCT data FROM estoque ORDER BY data DESC")
-                datas_estoque = [d[0] for d in c.fetchall()]
+                response = supabase.table('estoque').select('data').execute()
+                datas_estoque = list(set([d['data'] for d in response.data]))
+                datas_estoque.sort(reverse=True)
 
                 if datas_estoque:
                     data_selecionada = st.selectbox(
@@ -868,24 +978,18 @@ with abas[1]:
                         key="select_data_estoque"
                     )
 
-                    c.execute("""
-                        SELECT produto, quantidade, responsavel 
-                        FROM estoque 
-                        WHERE data = ? 
-                        ORDER BY produto
-                    """, (data_selecionada,))
-
-                    itens_data = c.fetchall()
+                    response = supabase.table('estoque').select(
+                        '*').eq('data', data_selecionada).execute()
+                    itens_data = response.data
 
                     if itens_data:
                         st.write(f"### 📋 Estoque em {data_selecionada}")
 
-                        df_estoque = pd.DataFrame(
-                            itens_data, columns=["Produto", "Quantidade", "Responsável"])
+                        df_estoque = pd.DataFrame(itens_data)
 
                         df_agrupado = df_estoque.groupby(
-                            "Produto")["Quantidade"].sum().reset_index()
-                        df_agrupado["Responsável"] = "Vários"
+                            "produto")["quantidade"].sum().reset_index()
+                        df_agrupado["responsavel"] = "Vários"
 
                         col_est1, col_est2 = st.columns(2)
 
@@ -895,11 +999,12 @@ with abas[1]:
 
                         with col_est2:
                             st.write("**📝 Detalhes por Responsável:**")
-                            st.dataframe(df_estoque, use_container_width=True)
+                            st.dataframe(
+                                df_estoque[['produto', 'quantidade', 'responsavel']], use_container_width=True)
 
-                        total_itens = df_estoque["Quantidade"].sum()
+                        total_itens = df_estoque["quantidade"].sum()
                         total_produtos = len(df_agrupado)
-                        total_responsaveis = df_estoque["Responsável"].nunique(
+                        total_responsaveis = df_estoque["responsavel"].nunique(
                         )
 
                         col_stat1, col_stat2, col_stat3 = st.columns(3)
@@ -917,30 +1022,90 @@ with abas[1]:
                     st.divider()
                     st.subheader("📈 Evolução do Estoque")
 
-                    c.execute("""
-                        SELECT data, produto, SUM(quantidade) as total
-                        FROM estoque 
-                        GROUP BY data, produto
-                        ORDER BY data
-                    """)
-
-                    evolucao_estoque = c.fetchall()
+                    response = supabase.table('estoque').select(
+                        'data, produto, quantidade').execute()
+                    evolucao_estoque = response.data
 
                     if evolucao_estoque:
-                        df_evolucao = pd.DataFrame(evolucao_estoque, columns=[
-                                                   "Data", "Produto", "Quantidade"])
+                        df_evolucao = pd.DataFrame(evolucao_estoque)
 
                         df_pivot = df_evolucao.pivot_table(
-                            index="Data",
-                            columns="Produto",
-                            values="Quantidade",
+                            index="data",
+                            columns="produto",
+                            values="quantidade",
                             fill_value=0
                         ).reset_index()
 
-                        st.line_chart(df_pivot.set_index("Data"))
+                        st.line_chart(df_pivot.set_index("data"))
 
                     else:
                         st.info("ℹ️ Nenhum registro de estoque encontrado")
+
+            with tab_bancario:
+                st.subheader("📊 Relatório de Conta Bancária")
+
+                # Seletor de período para relatório
+                col_periodo1, col_periodo2 = st.columns(2)
+                with col_periodo1:
+                    data_inicio = st.date_input("Data início:", datetime.now(
+                    ).date().replace(day=1), key="data_inicio_bancario")
+                with col_periodo2:
+                    data_fim = st.date_input(
+                        "Data fim:", datetime.now().date(), key="data_fim_bancario")
+
+                if st.button("📈 Gerar Relatório Bancário", key="btn_relatorio_bancario"):
+                    # Buscar dados do período
+                    response = supabase.table('caixa').select(
+                        '*').gte('data', data_inicio.isoformat()).lte('data', data_fim.isoformat()).execute()
+                    caixas_periodo = response.data
+
+                    if caixas_periodo:
+                        # Processar dados para o relatório
+                        df_bancario = pd.DataFrame(caixas_periodo)
+                        df_bancario['data'] = pd.to_datetime(
+                            df_bancario['data'])
+
+                        # Agrupar por data
+                        df_agrupado = df_bancario.groupby('data').agg({
+                            'conta_bancaria': 'sum',
+                            'dinheiro': 'sum',
+                            'maquineta': 'sum',
+                            'retiradas': 'sum'
+                        }).reset_index()
+
+                        # Calcular totais
+                        total_bancario = df_agrupado['conta_bancaria'].sum()
+                        total_dinheiro = df_agrupado['dinheiro'].sum()
+                        total_maquineta = df_agrupado['maquineta'].sum()
+                        total_retiradas = df_agrupado['retiradas'].sum()
+                        total_liquido = total_bancario + total_dinheiro + \
+                            total_maquineta - total_retiradas
+
+                        # Exibir métricas
+                        col_metric1, col_metric2, col_metric3, col_metric4 = st.columns(
+                            4)
+                        with col_metric1:
+                            st.metric("🏦 Total Bancário",
+                                      formatar_moeda(total_bancario))
+                        with col_metric2:
+                            st.metric("💵 Total Dinheiro",
+                                      formatar_moeda(total_dinheiro))
+                        with col_metric3:
+                            st.metric("💳 Total Maquineta",
+                                      formatar_moeda(total_maquineta))
+                        with col_metric4:
+                            st.metric("💰 Total Líquido",
+                                      formatar_moeda(total_liquido))
+
+                        # Gráfico de evolução
+                        st.line_chart(df_agrupado.set_index(
+                            'data')['conta_bancaria'])
+
+                        # Tabela detalhada
+                        st.dataframe(df_agrupado)
+                    else:
+                        st.info(
+                            "Nenhum dado encontrado para o período selecionado.")
 
 # --- ABA SUPORTE ---
 with abas[2]:
@@ -1019,6 +1184,3 @@ with abas[2]:
 # --- Rodapé ---
 st.divider()
 st.caption("Sistema EventoCaixa - Desenvolvido para gerenciamento de eventos • Suporte: thalita.muniz.amorim@gmail.com • (98) 98110-4216")
-
-# Fechar conexão ao final
-conn.close()
