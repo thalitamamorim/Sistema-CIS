@@ -911,8 +911,16 @@ with abas[1]:
                     st.dataframe(df_investidores, use_container_width=True)
 
                     # Gráfico de barras para status de devolução
-                    status_devolucao = df_investidores["devolvido"].value_counts(
-                    )
+                    # Verificar se a coluna existe antes de acessar
+                    if "devolvido" in df_investidores.columns:
+                        status_devolucao = df_investidores["devolvido"].value_counts(
+                        )
+                    else:
+                        st.error(
+                            "Coluna 'devolvido' não encontrada. Colunas disponíveis:")
+                        st.write(df_investidores.columns.tolist())
+                        status_devolucao = pd.Series()  # série vazia para evitar erro
+
                     if not status_devolucao.empty:
                         status_devolucao.index = status_devolucao.index.map(
                             {True: 'Devolvido', False: 'Pendente'})
