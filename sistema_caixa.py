@@ -1214,8 +1214,17 @@ with abas_principais[1]:
                             total_devolvido / total_investido * 100) if total_investido > 0 else 0
                         st.metric("📊 % Devolvido", f"{percentual:.2f}%")
 
-                    status_devolucao = df_investidores["devolvido"].value_counts(
-                    )
+         # Gráfico de barras para status de devolução
+                    # Verificar se a coluna existe antes de acessar
+                    if "devolvido" in df_investidores.columns:
+                        status_devolucao = df_investidores["devolvido"].value_counts(
+                        )
+                    else:
+                        st.error(
+                            "Coluna 'devolvido' não encontrada. Colunas disponíveis:")
+                        st.write(df_investidores.columns.tolist())
+                        status_devolucao = pd.Series()  # série vazia para evitar erro
+
                     if not status_devolucao.empty:
                         status_devolucao.index = status_devolucao.index.map(
                             {True: 'Devolvido', False: 'Pendente'})
